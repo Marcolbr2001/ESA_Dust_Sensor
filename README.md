@@ -1,9 +1,9 @@
 <div align="center">
-
-[![GitHub last commit](https://github.com/Marcolbr2001/Dust_Sensor/commits/main)]
+<!--
+[![GitHub last commit](https://img.shields.io/github/last-commit/Marcolbr2001/Dust_Sensor?style=for-the-badge)](https://github.com/Marcolbr2001/Dust_Sensor/commits/main)
 [![Issues](https://img.shields.io/github/issues/Marcolbr2001/Dust_Sensor?style=for-the-badge)](https://github.com/Marcolbr2001/Dust_Sensor/issues)
 [![MIT License](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
-
+-->
 </div>
 
 <br />
@@ -71,6 +71,23 @@ Here are some of the key features:
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
+## Description of Archive
+
+<pre>
+├─ ALU_sys_HDL                      # It contains the core project
+   └─ files                         # All the files stage by stage that had been used to build the entire project
+   └─ Py                            # Python code to test the Hardware
+   └─ ALU_sys_HDL.xpr.zip           # Vivado Archived Project, it has the block design already implemented (synthesis, implementation and bitstream has to be done)
+   └─ ALU_sys_HDL.zip               # HLS Archived Project, it has the HLS generated file before our VHDL insertion
+├─ SISD                             # The ALVEARE State-Of-Art communication protocol
+   └─ files                         # HLS core.cpp and tb
+   └─ SISD.xpr.zip                  # The SISD implementation
+├─ ASH_OHW_paper                    # Project documentation 
+├─ ASH_OHW_PWP                      # A power point presentation of the project
+├─ README.md                        # github README file
+└─ README.txt                       # txt version of the README
+
+</pre>
 
 ### Built With
 
