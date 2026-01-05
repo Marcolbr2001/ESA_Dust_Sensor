@@ -101,15 +101,20 @@ This section lists the major frameworks/libraries used to bootstrap your project
 
 This is an example of how you may give instructions on setting up your project locally. To get a local copy up and running follow these simple example steps.
 
-### Prerequisites
+### Setting up the GUI
 
-List things you need to use the software and how to install them.
-
+In order to use the software you have to navigate into
 * Example prerequisite
     ```sh
-    install command here
+    src/GUI
     ```
-
+and simply run the file named 
+* Example prerequisite
+    ```sh
+    DUST_Monitor.exe
+    ```
+> [!NOTE]
+> Your antivirus may block the executable. You might need to grant permission to run the file.
 ### Installation
 
 1.  Clone the repo
