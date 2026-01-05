@@ -138,7 +138,7 @@ A page like that will be showed to you.
 <img width="550" height="450" alt="dustGUI_first_page" src="https://github.com/user-attachments/assets/7469d1cf-9a90-492e-b1e8-32f5d7a810ce" />
   </a>
 </div>
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+<!--<p align="right">(<a href="#readme-top">back to top</a>)</p>-->
 <br>
 
 This software present four different pages:
@@ -170,7 +170,7 @@ Now you can start your acquisition by clicking the ```Play``` button either in t
 <img width="550" height="450" alt="screen" src="https://github.com/user-attachments/assets/04de5f7d-fb53-4b5f-9991-d80c4b9505fb" />
   </a>
 </div>
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+<!--<p align="right">(<a href="#readme-top">back to top</a>)</p>-->
 <br>
 
 ## Other
