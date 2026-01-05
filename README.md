@@ -138,7 +138,7 @@ A page like that will be showed to you.
 
 <div align="center">
   <a href="https://github.com/Marcolbr2001/Dust_Sensor">
-<img width="500" height="400" alt="dustGUI_first_page" src="https://github.com/user-attachments/assets/7469d1cf-9a90-492e-b1e8-32f5d7a810ce" />
+<img width="550" height="450" alt="dustGUI_first_page" src="https://github.com/user-attachments/assets/7469d1cf-9a90-492e-b1e8-32f5d7a810ce" />
   </a>
 </div>
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
@@ -165,11 +165,17 @@ The led will switch to **BLUE** 🔵 if the connection was established correctly
 
 For any problems (like hardware problem or conneciton not established correctly), the led will turn **RED** 🔴​, this means you must switch off the device and understand what went wrong.
 
-## Usage
+Now you can start your acquisition by clicking the ```Play``` button either in the ```Global``` page or ```Channels``` page. Once you press the button, you will begin see the data flow into the graphs. If you are for instance in the connection tab, you can choose to focus in a particular channel, just by clicking the particular channel window. Once you have done it, you will see something similar
 
-Use this space to show useful examples of how a project can be used. Additional screenshots, code examples and demos work well in this section.
+<div align="center">
+  <a href="https://github.com/Marcolbr2001/Dust_Sensor">
+<img width="550" height="450" alt="screen" src="https://github.com/user-attachments/assets/04de5f7d-fb53-4b5f-9991-d80c4b9505fb" />
+  </a>
+</div>
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+<br>
 
-![Usage Example](images/example-usage.gif)
+## Other
 
 *Example command:*
 ```sh
