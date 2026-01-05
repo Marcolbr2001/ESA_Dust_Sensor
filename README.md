@@ -104,17 +104,33 @@ This is an example of how you may give instructions on setting up your project l
 ### Setting up the GUI
 
 In order to use the software you have to navigate into
-* Example prerequisite
     ```sh
     src/GUI
     ```
 and simply run the file named 
-* Example prerequisite
     ```sh
     DUST_Monitor.exe
     ```
 > [!NOTE]
 > Your antivirus may block the executable. You might need to grant permission to run the file.
+
+If you are not able to run the program, you can launch it directly within Python.
+
+1.  Navigate into the folder
+    ```sh
+    src/GUI/src
+    ```
+3.  Install dependencies
+    ```sh
+    npm install
+    # or
+    pip install -r requirements.txt
+    ```
+2.  Open a new terminal here and run
+    ```sh
+    python main.py
+    ```
+    
 ### Installation
 
 1.  Clone the repo
