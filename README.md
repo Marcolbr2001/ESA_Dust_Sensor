@@ -44,7 +44,8 @@
     </li>
     <li><a href="#usage">Usage</a></li>
     <ul>
-        <li><a href="#built-with">Seeting-Up the GUI</a></li>
+        <li><a href="#Setting-Up-the-GUI">Setting-Up the GUI</a></li>
+        <li><a href="#Power-Up-the-board,-and-sttart-communication">Power-Up the board, and start communication</a></li>
       </ul>
    </li>
   </ol>
@@ -104,7 +105,7 @@ In order to have all the files into your local computer, open a folder in which 
 This is an example of how you may give instructions on setting up your project locally. To get a local copy up and running follow these simple example steps.
 
 ## Usage
-### Setting up the GUI
+### Setting Up the GUI
 
 Now we can start by using our sensor to do measurements. 
 
