@@ -8,9 +8,6 @@
 
 <br />
 <div align="center">
-  <a href="https://github.com/Marcolbr2001/Dust_Sensor">
-    <img src="images/logo.png" alt="Logo" width="80" height="80">
-  </a>
 
   <h3 align="center">Dust Sensor System</h3>
 
@@ -28,6 +25,9 @@
   </p>
 </div>
 
+  <a href="https://github.com/Marcolbr2001/Dust_Sensor">
+    <img src="images/logo.png" alt="Logo" width="80" height="80">
+  </a>
 
 <details>
   <summary>Table of Contents</summary>
@@ -57,36 +57,32 @@
 
 ## About The Project
 
-[![Product Screenshot][product-screenshot]](https://github.com/Marcolbr2001/Dust_Sensor)
+<!--[![Product Screenshot][product-screenshot]](https://github.com/Marcolbr2001/Dust_Sensor)-->
 
-[INSERT A DETAILED DESCRIPTION OF THE PROJECT HERE]
+This work presents the development of a system designed to support dust sensor integration, with specific attention to EMC, power, and dimensional constraints. For the final user, they only need to connect via Bluetooth the board and work with the computer interface, monitoring correctly the environment.
 
-This project is designed to... The main goal is...
-It was developed because...
-
-Here are some of the key features:
-* Feature A
-* Feature B
-* Feature C
+Here are some of the key steps to a correct utilization of the system:
+* Placing the carrier board carefully into the motherboard
+* Open the GUI and connect the board
+* Monitoring dust status
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Description of Archive
 
 <pre>
-├─ src                      # This folder contains all the files to build the project
-   └─ GUI                         # The user interface to communicate with the sensor
-   └─ PCBs                            # PCBs file and guide to boards hardware
-   └─ firmware           # Current last-version firmware uploaded in the microcontroller
-├─ README.md                             # This file
-└─ project_overview.pdf                       # pdf overview of theoretical foundation of the sensor and board functionality
+├─ src                     # This folder contains all the files to build the project
+   └─ GUI                  # The user interface to communicate with the sensor
+   └─ PCBs                 # PCBs file and guide to boards hardware
+   └─ firmware             # Current last-version firmware uploaded in the microcontroller
+├─ README.md               # This file
+└─ project_overview.pdf    # pdf overview, sensors's theoretical foundation and board functionality
 
 </pre>
 
 ### Built With
 
 This section lists the major frameworks/libraries used to bootstrap your project.
-*(Examples of badges included below. Change names and colors as needed)*
 
 * [![Python][Python-badge]][Python-url]
 * [![C++][CPP-badge]][CPP-url]
