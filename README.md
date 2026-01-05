@@ -99,46 +99,66 @@ This section lists the major frameworks/libraries used to bootstrap your project
 
 ## Getting Started
 
-This is an example of how you may give instructions on setting up your project locally. To get a local copy up and running follow these simple example steps.
-
-### Setting up the GUI
-
 In order to have all the files into your local computer, open a folder in which you want to download the project and open a new terminal in that folder.
 
 1.  Clone the repo
     ```sh
     git clone [https://github.com/](https://github.com/)Marcolbr2001/Dust_Sensor.git .
     ```
+
+This is an example of how you may give instructions on setting up your project locally. To get a local copy up and running follow these simple example steps.
+
+## Usage
+### Setting up the GUI
+
 Now we can start by using our sensor to do measurements. 
 
-2. To use the software you have to navigate into ``` src/GUI ```, and simply run the file named ```DUST_Monitor.exe```
+To use the software you have to navigate into ``` src/GUI ```, and simply run the file named ```DUST_Monitor.exe```
 
 > [!WARNING]
 > Your antivirus may block the executable. You might need to grant permission to run the file.
 
- If you are not able to run the program, you can launch it directly within Python. If you did not encounter this problem, you can go directly to point 6.
+ If you are not able to run the program, you can launch it directly within Python. If you did not encounter this problem, you can skip these points.
 
-3.  Navigate into the folder
+1.  Navigate into the folder
     ```sh
     src/GUI/src
     ```
-4.  Install dependencies
+2.  Install dependencies
     ```sh
     pip install -r requirements.txt
     ```
-5.  In case you do not have Python in your computer run this command
+3.  In case you do not have Python in your computer run this command
     ```sh
     winget install -e --id Python.Python.3.11; Start-Process powershell -Verb RunAs -ArgumentList "-NoExit -Command pip install customtkinter pillow bleak pyserial"
     ```
+<br>
 
 A page like that will be showed to you.
+
 <div align="center">
   <a href="https://github.com/Marcolbr2001/Dust_Sensor">
-<img width="400" height="300" alt="dustGUI_first_page" src="https://github.com/user-attachments/assets/7469d1cf-9a90-492e-b1e8-32f5d7a810ce" />
+<img width="500" height="400" alt="dustGUI_first_page" src="https://github.com/user-attachments/assets/7469d1cf-9a90-492e-b1e8-32f5d7a810ce" />
   </a>
 </div>
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
+<br>
 
+This software present four different pages:
+* Connection -> This page is able to connect your device with Bluetooth or with Serial Interface.
+* Global     -> This page shows global parameters as the number of particles deposited and the ppm value. You can also start and stop acquisition from here.
+* Channels   -> This page gives you a complete picture of what is going on, channel by channel. Once you start an acquisition, you can choose to save current data into your computer, or into the onboard SD for a long-term exposion.
+* Dashboard  -> Here you can find all the settings and parameters both for the sensor acquisition, and for the GUI. 
+
+### Power-Up the board, and start communication
+
+Once you set the software, it is time to turn on the device simply by connecting it thourgh USB (5V) or with the power connector.
+
+> [!WARNING]
+> To ensure proper operation, the power supply voltage must not exceed 5V.
+
+
+In order to connect your device, first press the ```Scan BT``` button. Once your device has been found, you can press the ```BT connect``` button and wait for the connection
 
 ## Usage
 
