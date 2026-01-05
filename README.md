@@ -26,7 +26,7 @@
 </div>
 
   <a href="https://github.com/Marcolbr2001/Dust_Sensor">
-    <img src="[dust_boards](https://github.com/user-attachments/assets/70fec228-3cf5-4fef-bc37-bc2c930fc334)" alt="Logo">
+    <img src="https://github.com/user-attachments/assets/70fec228-3cf5-4fef-bc37-bc2c930fc334" alt="Logo">
 
     
 
