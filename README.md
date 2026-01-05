@@ -68,7 +68,7 @@ Here are some of the key steps to a correct utilization of the system:
 * Monitoring dust status
 
 > [!NOTE]
-> This tutorial addresses all the potential issues you may encounter during setup.
+> This tutorial addresses all the steps and potential issues you may encounter during your setup. It is not intended to cover all the PCB, firmware and software technical implementation. If you are interested, please contact me.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
