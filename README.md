@@ -9,15 +9,14 @@
 <br />
 <div align="center">
 
-  <h3 align="center">Dust Sensor System</h3>
+  <h2 align="center">Dust Sensor System</h2>
 
   <p align="center">
-    [A short slogan or description of your project goes here]
-    <br />
+    Fully electronic system for real-time tracking of dust particle deposition in space applications    <br />
     <a href="https://github.com/Marcolbr2001/Dust_Sensor"><strong>Explore the docs »</strong></a>
     <br />
     <br />
-    <a href="https://github.com/Marcolbr2001/Dust_Sensor">View Demo</a>
+    <a href="https://github.com/Marcolbr2001/Dust_Sensor">View Repo</a>
     ·
     <a href="https://github.com/Marcolbr2001/Dust_Sensor/issues">Report Bug</a>
     ·
@@ -67,6 +66,9 @@ Here are some of the key steps to a correct utilization of the system:
 * Placing the carrier board carefully into the motherboard
 * Open the GUI and connect the board
 * Monitoring dust status
+
+> [!WARNING]
+> You can directly go to STEP 2 using the 'ALU_sys_HDL.xpr.zip' Archived Project. From this VHDL project you can simply start to synthesize, implement and run the bitstream with all the files created with the previous STEP (the implementation hasn't been uploaded because it had too large dimension). 
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
