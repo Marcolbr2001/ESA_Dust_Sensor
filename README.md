@@ -74,18 +74,12 @@ Here are some of the key features:
 ## Description of Archive
 
 <pre>
-├─ ALU_sys_HDL                      # It contains the core project
-   └─ files                         # All the files stage by stage that had been used to build the entire project
-   └─ Py                            # Python code to test the Hardware
-   └─ ALU_sys_HDL.xpr.zip           # Vivado Archived Project, it has the block design already implemented (synthesis, implementation and bitstream has to be done)
-   └─ ALU_sys_HDL.zip               # HLS Archived Project, it has the HLS generated file before our VHDL insertion
-├─ SISD                             # The ALVEARE State-Of-Art communication protocol
-   └─ files                         # HLS core.cpp and tb
-   └─ SISD.xpr.zip                  # The SISD implementation
-├─ ASH_OHW_paper                    # Project documentation 
-├─ ASH_OHW_PWP                      # A power point presentation of the project
-├─ README.md                        # github README file
-└─ README.txt                       # txt version of the README
+├─ src                      # This folder contains all the files to build the project
+   └─ GUI                         # The user interface to communicate with the sensor
+   └─ PCBs                            # PCBs file and guide to boards hardware
+   └─ firmware           # Current last-version firmware uploaded in the microcontroller
+├─ README.md                             # This file
+└─ project_overview.pdf                       # pdf overview of theoretical foundation of the sensor and board functionality
 
 </pre>
 
