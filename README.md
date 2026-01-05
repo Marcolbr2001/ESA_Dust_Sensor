@@ -103,7 +103,15 @@ This is an example of how you may give instructions on setting up your project l
 
 ### Setting up the GUI
 
-In order to use the software you have to navigate into
+In order to have all the files into your local computer
+
+1.  Clone the repo
+    ```sh
+    git clone [https://github.com/](https://github.com/)Marcolbr2001/Dust_Sensor.git
+    ```
+Now we can start by using our sensor to do measurements.
+
+2. To use the software you have to navigate into
     ```sh
     src/GUI
     ```
@@ -111,41 +119,25 @@ and simply run the file named
     ```sh
     DUST_Monitor.exe
     ```
+    
 > [!NOTE]
 > Your antivirus may block the executable. You might need to grant permission to run the file.
 
 If you are not able to run the program, you can launch it directly within Python.
 
-1.  Navigate into the folder
+2_1.  Navigate into the folder
     ```sh
     src/GUI/src
     ```
-3.  Install dependencies
+2_2.  Install dependencies
     ```sh
     npm install
     # or
     pip install -r requirements.txt
     ```
-2.  Open a new terminal here and run
+2_3.  In case you do not have Python in your computer run this command
     ```sh
-    python main.py
-    ```
-    
-### Installation
-
-1.  Clone the repo
-    ```sh
-    git clone [https://github.com/](https://github.com/)Marcolbr2001/Dust_Sensor.git
-    ```
-2.  Navigate to the project folder
-    ```sh
-    cd [FOLDER-NAME]
-    ```
-3.  Install dependencies (example)
-    ```sh
-    npm install
-    # or
-    pip install -r requirements.txt
+    winget install -e --id Python.Python.3.11; Start-Process powershell -Verb RunAs -ArgumentList "-NoExit -Command pip install customtkinter pillow bleak pyserial"
     ```
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
