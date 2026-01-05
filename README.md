@@ -25,12 +25,11 @@
   </p>
 </div>
 
+<div align="center">
   <a href="https://github.com/Marcolbr2001/Dust_Sensor">
-    <img src="https://github.com/user-attachments/assets/70fec228-3cf5-4fef-bc37-bc2c930fc334" alt="Logo" heigth="200" width="200">
-
-    
-
+    <img src="https://github.com/user-attachments/assets/70fec228-3cf5-4fef-bc37-bc2c930fc334" alt="Logo" heigth="600" width="600">
   </a>
+</div>
 
 <details>
   <summary>Table of Contents</summary>
