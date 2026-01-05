@@ -1,14 +1,14 @@
 <div align="center">
 
-[![GitHub last commit](https://img.shields.io/github/last-commit/[YOUR-USERNAME]/[YOUR-REPO]?style=for-the-badge)](https://github.com/[YOUR-USERNAME]/[YOUR-REPO]/commits/main)
-[![Issues](https://img.shields.io/github/issues/[YOUR-USERNAME]/[YOUR-REPO]?style=for-the-badge)](https://github.com/[YOUR-USERNAME]/[YOUR-REPO]/issues)
+[![GitHub last commit](https://img.shields.io/github/last-commit/Marcolbr2001/Dust_Sensor?style=for-the-badge)](https://github.com/Marcolbr2001/Dust_Sensor/commits/main)
+[![Issues](https://img.shields.io/github/issues/Marcolbr2001/Dust_Sensor?style=for-the-badge)](https://github.com/Marcolbr2001/Dust_Sensor/issues)
 [![MIT License](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
 </div>
 
 <br />
 <div align="center">
-  <a href="https://github.com/[YOUR-USERNAME]/[YOUR-REPO]">
+  <a href="https://github.com/Marcolbr2001/Dust_Sensor">
     <img src="images/logo.png" alt="Logo" width="80" height="80">
   </a>
 
@@ -17,14 +17,14 @@
   <p align="center">
     [A short slogan or description of your project goes here]
     <br />
-    <a href="https://github.com/[YOUR-USERNAME]/[YOUR-REPO]"><strong>Explore the docs »</strong></a>
+    <a href="https://github.com/Marcolbr2001/Dust_Sensor"><strong>Explore the docs »</strong></a>
     <br />
     <br />
-    <a href="https://github.com/[YOUR-USERNAME]/[YOUR-REPO]">View Demo</a>
+    <a href="https://github.com/Marcolbr2001/Dust_Sensor">View Demo</a>
     ·
-    <a href="https://github.com/[YOUR-USERNAME]/[YOUR-REPO]/issues">Report Bug</a>
+    <a href="https://github.com/Marcolbr2001/Dust_Sensor/issues">Report Bug</a>
     ·
-    <a href="https://github.com/[YOUR-USERNAME]/[YOUR-REPO]/issues">Request Feature</a>
+    <a href="https://github.com/Marcolbr2001/Dust_Sensor/issues">Request Feature</a>
   </p>
 </div>
 
@@ -57,7 +57,7 @@
 
 ## About The Project
 
-[![Product Screenshot][product-screenshot]](https://github.com/[YOUR-USERNAME]/[YOUR-REPO])
+[![Product Screenshot][product-screenshot]](https://github.com/Marcolbr2001/Dust_Sensor)
 
 [INSERT A DETAILED DESCRIPTION OF THE PROJECT HERE]
 
@@ -102,7 +102,7 @@ List things you need to use the software and how to install them.
 
 1.  Clone the repo
     ```sh
-    git clone [https://github.com/](https://github.com/)[YOUR-USERNAME]/[YOUR-REPO].git
+    git clone [https://github.com/](https://github.com/)Marcolbr2001/Dust_Sensor.git
     ```
 2.  Navigate to the project folder
     ```sh
