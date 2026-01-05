@@ -67,8 +67,8 @@ Here are some of the key steps to a correct utilization of the system:
 * Open the GUI and connect the board
 * Monitoring dust status
 
-> [!WARNING]
-> You can directly go to STEP 2 using the 'ALU_sys_HDL.xpr.zip' Archived Project. From this VHDL project you can simply start to synthesize, implement and run the bitstream with all the files created with the previous STEP (the implementation hasn't been uploaded because it had too large dimension). 
+> [!NOTE]
+> This tutorial addresses all the potential issues you may encounter during setup.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
