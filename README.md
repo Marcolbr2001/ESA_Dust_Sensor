@@ -109,17 +109,10 @@ In order to have all the files into your local computer
     ```sh
     git clone [https://github.com/](https://github.com/)Marcolbr2001/Dust_Sensor.git
     ```
-Now we can start by using our sensor to do measurements.
+2. Now we can start by using our sensor to do measurements.
 
-2. To use the software you have to navigate into
-    ```sh
-    src/GUI
-    ```
-and simply run the file named 
-    ```sh
-    DUST_Monitor.exe
-    ```
-    
+To use the software you have to navigate into ``` src/GUI ```, and simply run the file named ```DUST_Monitor.exe```
+
 > [!NOTE]
 > Your antivirus may block the executable. You might need to grant permission to run the file.
 
