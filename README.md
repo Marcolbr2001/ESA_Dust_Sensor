@@ -109,9 +109,7 @@ In order to have all the files into your local computer
     ```sh
     git clone [https://github.com/](https://github.com/)Marcolbr2001/Dust_Sensor.git
     ```
-2. Now we can start by using our sensor to do measurements.
-
-To use the software you have to navigate into ``` src/GUI ```, and simply run the file named ```DUST_Monitor.exe```
+2. Now we can start by using our sensor to do measurements. Firstly, to use the software you have to navigate into ``` src/GUI ```, and simply run the file named ```DUST_Monitor.exe```
 
 > [!WARNING]
 > Your antivirus may block the executable. You might need to grant permission to run the file.
@@ -124,8 +122,6 @@ To use the software you have to navigate into ``` src/GUI ```, and simply run th
     ```
 4.  Install dependencies
     ```sh
-    npm install
-    # or
     pip install -r requirements.txt
     ```
 5.  In case you do not have Python in your computer run this command
