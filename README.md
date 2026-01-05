@@ -41,17 +41,12 @@
     </li>
     <li>
       <a href="#getting-started">Getting Started</a>
-      <ul>
-        <li><a href="#prerequisites">Prerequisites</a></li>
-        <li><a href="#installation">Installation</a></li>
-      </ul>
     </li>
     <li><a href="#usage">Usage</a></li>
-    <li><a href="#roadmap">Roadmap</a></li>
-    <li><a href="#contributing">Contributing</a></li>
-    <li><a href="#license">License</a></li>
-    <li><a href="#contact">Contact</a></li>
-    <li><a href="#acknowledgments">Acknowledgments</a></li>
+    <ul>
+        <li><a href="#built-with">Seeting-Up the GUI</a></li>
+      </ul>
+   </li>
   </ol>
 </details>
 
@@ -70,7 +65,7 @@ Here are some of the key steps to a correct utilization of the system:
 > [!NOTE]
 > This tutorial addresses all the steps and potential issues you may encounter during your setup. It is not intended to cover all the PCB, firmware and software technical implementation. If you are interested, please contact me.
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+<!--<p align="right">(<a href="#readme-top">back to top</a>)</p>-->
 
 ## Description of Archive
 
@@ -94,7 +89,7 @@ This section lists the major frameworks/libraries used to bootstrap your project
 <br>
 [![Altium Designer](https://img.shields.io/badge/Altium_Designer-A5915F?style=for-the-badge&logo=altiumdesigner&logoColor=white)](https://www.altium.com/)
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+<!--<p align="right">(<a href="#readme-top">back to top</a>)</p>-->
 
 
 ## Getting Started
@@ -135,6 +130,7 @@ To use the software you have to navigate into ``` src/GUI ```, and simply run th
 <br>
 
 A page like that will be showed to you.
+<br>
 
 <div align="center">
   <a href="https://github.com/Marcolbr2001/Dust_Sensor">
@@ -165,7 +161,8 @@ The led will switch to **BLUE** 🔵 if the connection was established correctly
 
 For any problems (like hardware problem or conneciton not established correctly), the led will turn **RED** 🔴​, this means you must switch off the device and understand what went wrong.
 
-Now you can start your acquisition by clicking the ```Play``` button either in the ```Global``` page or ```Channels``` page. Once you press the button, you will begin see the data flow into the graphs. If you are for instance in the connection tab, you can choose to focus in a particular channel, just by clicking the particular channel window. Once you have done it, you will see something similar
+Now you can start your acquisition by clicking the ```Play``` button either in the ```Global``` page or ```Channels``` page. Once you press the button, you will begin see the data flow into the graphs. If you are for instance in the ```Channels``` tab, you can choose to focus in a particular channel, just by clicking the particular channel window. Once you have done it, you will see something similar
+<br>
 
 <div align="center">
   <a href="https://github.com/Marcolbr2001/Dust_Sensor">
@@ -176,7 +173,3 @@ Now you can start your acquisition by clicking the ```Play``` button either in t
 <br>
 
 ## Other
-
-*Example command:*
-```sh
-python main.py --help
