@@ -145,10 +145,10 @@ A page like that will be showed to you.
 <br>
 
 This software present four different pages:
-* Connection -> This page is able to connect your device with Bluetooth or with Serial Interface.
-* Global     -> This page shows global parameters as the number of particles deposited and the ppm value. You can also start and stop acquisition from here.
-* Channels   -> This page gives you a complete picture of what is going on, channel by channel. Once you start an acquisition, you can choose to save current data into your computer, or into the onboard SD for a long-term exposion.
-* Dashboard  -> Here you can find all the settings and parameters both for the sensor acquisition, and for the GUI. 
+* ```Connection``` -> This page is able to connect your device with Bluetooth or with Serial Interface.
+* ```Global```     -> This page shows global parameters as the number of particles deposited and the ppm value. You can also start and stop acquisition from here.
+* ```Channels```   -> This page gives you a complete picture of what is going on, channel by channel. Once you start an acquisition, you can choose to save current data into your computer, or into the onboard SD for a long-term exposion.
+* ```Dashboard```  -> Here you can find all the settings and parameters both for the sensor acquisition, and for the GUI. 
 
 ### Power-Up the board, and start communication
 
@@ -157,8 +157,13 @@ Once you set the software, it is time to turn on the device simply by connecting
 > [!WARNING]
 > To ensure proper operation, the power supply voltage must not exceed 5V.
 
+Now, a **GREEN** led 🟢​ will advice you that everything is ok, and the system is ready to connect.
 
-In order to connect your device, first press the ```Scan BT``` button. Once your device has been found, you can press the ```BT connect``` button and wait for the connection
+To connect your device, first press the ```Scan BT``` button on the GUI. Once your device has been found, you can press the ```BT connect``` button and wait for the connection.
+
+The led will switch to **BLUE** 🔵 if the connection was established correctly.
+
+For any problems (like hardware problem or conneciton not established correctly), the led will turn **RED** 🔴​, this means you must switch off the device and understand what went wrong.
 
 ## Usage
 
