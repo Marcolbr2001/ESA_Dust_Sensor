@@ -1,6 +1,6 @@
 <div align="center">
 
-[![GitHub last commit](https://github.com/Marcolbr2001/Dust_Sensor/commits/main)
+[![GitHub last commit](https://github.com/Marcolbr2001/Dust_Sensor/commits/main)]
 [![Issues](https://img.shields.io/github/issues/Marcolbr2001/Dust_Sensor?style=for-the-badge)](https://github.com/Marcolbr2001/Dust_Sensor/issues)
 [![MIT License](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
