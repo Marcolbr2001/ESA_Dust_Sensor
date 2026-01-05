@@ -116,7 +116,7 @@ Now we can start by using our sensor to do measurements.
 > [!WARNING]
 > Your antivirus may block the executable. You might need to grant permission to run the file.
 
- If you are not able to run the program, you can launch it directly within Python. If you did not encounter this prblem, you can go directly to point 6.
+ If you are not able to run the program, you can launch it directly within Python. If you did not encounter this problem, you can go directly to point 6.
 
 3.  Navigate into the folder
     ```sh
@@ -131,6 +131,12 @@ Now we can start by using our sensor to do measurements.
     winget install -e --id Python.Python.3.11; Start-Process powershell -Verb RunAs -ArgumentList "-NoExit -Command pip install customtkinter pillow bleak pyserial"
     ```
 
+A page like that will be showed to you.
+<div align="center">
+  <a href="https://github.com/Marcolbr2001/Dust_Sensor">
+<img width="400" height="300" alt="dustGUI_first_page" src="https://github.com/user-attachments/assets/7469d1cf-9a90-492e-b1e8-32f5d7a810ce" />
+  </a>
+</div>
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 
