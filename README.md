@@ -113,22 +113,22 @@ In order to have all the files into your local computer
 
 To use the software you have to navigate into ``` src/GUI ```, and simply run the file named ```DUST_Monitor.exe```
 
-> [!NOTE]
+> [!WARNING]
 > Your antivirus may block the executable. You might need to grant permission to run the file.
 
-If you are not able to run the program, you can launch it directly within Python.
+ If you are not able to run the program, you can launch it directly within Python. If you did not encounter this prblem, you can go directly to point 6.
 
-2_1.  Navigate into the folder
+3.  Navigate into the folder
     ```sh
     src/GUI/src
     ```
-2_2.  Install dependencies
+4.  Install dependencies
     ```sh
     npm install
     # or
     pip install -r requirements.txt
     ```
-2_3.  In case you do not have Python in your computer run this command
+5.  In case you do not have Python in your computer run this command
     ```sh
     winget install -e --id Python.Python.3.11; Start-Process powershell -Verb RunAs -ArgumentList "-NoExit -Command pip install customtkinter pillow bleak pyserial"
     ```
