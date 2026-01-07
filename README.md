@@ -174,7 +174,7 @@ Now, a **GREEN** led 🟢​ will advice you that everything is ok, and the syst
 
 <div align="center">
   <a href="https://github.com/Marcolbr2001/Dust_Sensor">
-    <img src="https://github.com/user-attachments/assets/56160e5a-052d-4790-a8ae-a49cc560d69d" alt="board green" heigth="300" width="300">
+    <img src="https://github.com/user-attachments/assets/56160e5a-052d-4790-a8ae-a49cc560d69d" alt="board green" heigth="250" width="250">
   </a>
 </div>
 
@@ -184,7 +184,7 @@ The led will switch to **BLUE** 🔵 if the connection was established correctly
 
 <div align="center">
   <a href="https://github.com/Marcolbr2001/Dust_Sensor">
-    <img src="https://github.com/user-attachments/assets/a9617b91-1545-4346-aef6-2fe9291ada43" alt="board blue" heigth="300" width="300">
+    <img src="https://github.com/user-attachments/assets/a9617b91-1545-4346-aef6-2fe9291ada43" alt="board blue" heigth="250" width="250">
   </a>
 </div>
 
