@@ -25,6 +25,20 @@
 </div>
 
 <div align="center">
+  <p align="center">
+    <a href="https://github.com/Marcolbr2001/Dust_Sensor">
+      <img src="https://img.shields.io/badge/View_Repo-20232A?style=for-the-badge&logo=github&logoColor=white" alt="View Repo" />
+    </a>
+    &nbsp; <a href="https://github.com/Marcolbr2001/Dust_Sensor/issues">
+      <img src="https://img.shields.io/badge/Report_Bug-CC0000?style=for-the-badge&logo=github&logoColor=white" alt="Report Bug" />
+    </a>
+    &nbsp; <a href="https://github.com/Marcolbr2001/Dust_Sensor/issues">
+      <img src="https://img.shields.io/badge/Request_Feature-2EA44F?style=for-the-badge&logo=github&logoColor=white" alt="Request Feature" />
+    </a>
+  </p>
+</div>
+
+<div align="center">
   <a href="https://github.com/Marcolbr2001/Dust_Sensor">
     <img src="https://github.com/user-attachments/assets/70fec228-3cf5-4fef-bc37-bc2c930fc334" alt="Logo" heigth="400" width="400">
   </a>
