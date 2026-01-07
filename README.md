@@ -124,7 +124,13 @@ To use the software you have to navigate into ``` src/GUI ```, and simply run th
     ```sh
     pip install -r requirements.txt
     ```
-3.  In case you do not have Python in your computer run this command
+
+3.  create executable, it can be then found in the new ```dist``` folder. 
+    ```sh
+    python -m PyInstaller --noconsole --onefile --name="DUST_Monitor" --add-data "img;img" --collect-all customtkinter main.py
+    ```    
+    
+4.  In case you do not have Python in your computer run this command
     ```sh
     winget install -e --id Python.Python.3.11; Start-Process powershell -Verb RunAs -ArgumentList "-NoExit -Command pip install customtkinter pillow bleak pyserial"
     ```
