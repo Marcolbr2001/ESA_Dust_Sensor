@@ -191,7 +191,9 @@ The led will switch to **BLUE** 🔵 if the connection was established correctly
 
 For any problems (like hardware problem or conneciton not established correctly), the led will turn **RED** 🔴​, this means you must switch off the device and understand what went wrong.
 
-Now you can start your acquisition by clicking the ```Play``` button either in the ```Global``` page or ```Channels``` page. Once you press the button, you will begin see the data flow into the graphs. If you are for instance in the ```Channels``` tab, you can choose to focus in a particular channel, just by clicking the particular channel window. Once you have done it, you will see something similar
+Now you can start your acquisition by clicking the ```▶``` button either in the ```Global``` page or ```Channels``` page. 
+
+Once you press the button, you will begin see the data flow into the graphs. If you are for instance in the ```Channels``` tab, you can choose to focus on a particular channel, just by clicking the particular channel window. Once you have done it, you will see something similar
 <br>
 
 <div align="center">
