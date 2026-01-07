@@ -125,7 +125,7 @@ To use the software you have to navigate into ``` src/GUI ```, and simply run th
     pip install -r requirements.txt
     ```
 
-3.  create executable, it can be then found in the new ```dist``` folder. 
+3.  create executable, after running this command, you can find the .exe file in the ```dist``` folder. 
     ```sh
     python -m PyInstaller --noconsole --onefile --name="DUST_Monitor" --add-data "img;img" --collect-all customtkinter main.py
     ```    
