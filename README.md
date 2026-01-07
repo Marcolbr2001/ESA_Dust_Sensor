@@ -13,14 +13,6 @@
 
   <p align="center">
     Fully electronic system for real-time tracking of dust particle deposition in space applications    <br />
-    <a href="https://github.com/Marcolbr2001/Dust_Sensor"><strong>Explore the docs »</strong></a>
-    <br />
-    <br />
-    <a href="https://github.com/Marcolbr2001/Dust_Sensor">View Repo</a>
-    ·
-    <a href="https://github.com/Marcolbr2001/Dust_Sensor/issues">Report Bug</a>
-    ·
-    <a href="https://github.com/Marcolbr2001/Dust_Sensor/issues">Request Feature</a>
   </p>
 </div>
 
