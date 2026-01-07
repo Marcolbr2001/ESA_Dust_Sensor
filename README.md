@@ -22,7 +22,7 @@
       <img src="https://img.shields.io/badge/View_Repo-20232A?style=for-the-badge&logo=github&logoColor=white" alt="View Repo" />
     </a>
     &nbsp; <a href="https://github.com/Marcolbr2001/Dust_Sensor/issues">
-      <img src="https://img.shields.io/badge/Report_Bug-D63232?style=for-the-badge&logo=github&logoColor=white" alt="Report Bug" />
+      <img src="https://img.shields.io/badge/Report_Bug-DB4C4C?style=for-the-badge&logo=github&logoColor=white" alt="Report Bug" />
     </a>
     &nbsp; <a href="https://github.com/Marcolbr2001/Dust_Sensor/issues">
       <img src="https://img.shields.io/badge/Request_Feature-2EA44F?style=for-the-badge&logo=github&logoColor=white" alt="Request Feature" />
