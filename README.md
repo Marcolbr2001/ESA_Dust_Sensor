@@ -133,7 +133,7 @@ If you prefer to create your own executable file
     pip install -r requirements.txt
     ```
 
-4.  create executable, after running this command, you can find the .exe file in the ```dist``` folder. 
+4.  Create the executable. After running this command, you can find the .exe file in the ```dist``` folder. 
     ```sh
     python -m PyInstaller --noconsole --onefile --name="DUST_Monitor" --add-data "img;img" --collect-all customtkinter main.py
     ```    
