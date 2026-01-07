@@ -172,9 +172,22 @@ Once you set the software, it is time to turn on the device simply by connecting
 
 Now, a **GREEN** led 🟢​ will advice you that everything is ok, and the system is ready to connect.
 
+<div align="center">
+  <a href="https://github.com/Marcolbr2001/Dust_Sensor">
+    <img src="https://github.com/user-attachments/assets/56160e5a-052d-4790-a8ae-a49cc560d69d" alt="board green" heigth="300" width="300">
+  </a>
+</div>
+
 To connect your device, first press the ```Scan BT``` button on the GUI. Once your device has been found, you can press the ```BT connect``` button and wait for the connection.
 
 The led will switch to **BLUE** 🔵 if the connection was established correctly.
+
+<div align="center">
+  <a href="https://github.com/Marcolbr2001/Dust_Sensor">
+    <img src="https://github.com/user-attachments/assets/a9617b91-1545-4346-aef6-2fe9291ada43" alt="board blue" heigth="300" width="300">
+  </a>
+</div>
+
 
 For any problems (like hardware problem or conneciton not established correctly), the led will turn **RED** 🔴​, this means you must switch off the device and understand what went wrong.
 
