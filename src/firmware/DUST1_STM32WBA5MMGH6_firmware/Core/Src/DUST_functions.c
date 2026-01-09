@@ -108,38 +108,38 @@ static uint8_t uart_frame[2 + DUST_CHANNELS * 3 + 2]; // header + 32*(sync+ch+co
 // ---------------------------------------------- //
 
 static const uint32_t bsrrA[32] = {
-    0x80020000,  // i=0   (bits 1,3=0,0 => reset PA15, PA9)
-    0x00000002,  // i=1   (bits 1,3=0,0 => same as i=0, because bit1 is 0)
-    0x80000000,  // i=2   (bits 1,3=0,0 => same, bit3 is 0)
-    0x00000000,  // i=3   (bits 1,3=0,1 => set PA9, reset PA15)
-    0x00028000,  // i=4   (bits 1,3=1,0 => set PA15, reset PA9)
-    0x00028000,  // i=5
-    0x00008000,  // i=6
-    0x00008000,  // i=7   (bits 1,3=1,1 => set PA15 and PA9)
-    0x80020000,  // i=8
-    0x00020000,  // i=9
-    0x80000000,  // i=10
-    0x00000000,  // i=11
-    0x00028000,  // i=12
-    0x00028000,  // i=13
-    0x00008000,  // i=14
-    0x00008000,  // i=15
-    0x80020000,  // i=16
-    0x00020000,  // i=17
-    0x80000000,  // i=18
-    0x00000000,  // i=19
-    0x00028000,  // i=20
-    0x00028000,  // i=21
-    0x00008000,  // i=22
-    0x00008000,  // i=23
-    0x80020000,  // i=24
-    0x00020000,  // i=25
-    0x80000000,  // i=26
-    0x00000000,  // i=27
-    0x00028000,  // i=28
-    0x00028000,  // i=29
-    0x00008000,  // i=30
-    0x00008000   // i=31
+    0x00DA0000, // i=0  (00000) -> Reset PA1, PA3, PA4, PA6, PA7
+    0x005A0080, // i=1  (00001) -> Set PA7
+    0x009A0040, // i=2  (00010) -> Set PA6
+    0x001A00C0, // i=3  (00011) -> Set PA6, PA7
+    0x00CA0010, // i=4  (00100) -> Set PA4
+    0x004A0090, // i=5  (00101) -> Set PA4, PA7
+    0x008A0050, // i=6  (00110) -> Set PA4, PA6
+    0x000A00D0, // i=7  (00111) -> Set PA4, PA6, PA7
+    0x00D20008, // i=8  (01000) -> Set PA3
+    0x00520088, // i=9  (01001) -> Set PA3, PA7
+    0x00920048, // i=10 (01010) -> Set PA3, PA6
+    0x001200C8, // i=11 (01011) -> Set PA3, PA6, PA7
+    0x00C20018, // i=12 (01100) -> Set PA3, PA4
+    0x00420098, // i=13 (01101) -> Set PA3, PA4, PA7
+    0x00820058, // i=14 (01110) -> Set PA3, PA4, PA6
+    0x000200D8, // i=15 (01111) -> Set PA3, PA4, PA6, PA7
+    0x00D80002, // i=16 (10000) -> Set PA1
+    0x00580082, // i=17 (10001) -> Set PA1, PA7
+    0x00980042, // i=18 (10010) -> Set PA1, PA6
+    0x001800C2, // i=19 (10011) -> Set PA1, PA6, PA7
+    0x00C80012, // i=20 (10100) -> Set PA1, PA4
+    0x00480092, // i=21 (10101) -> Set PA1, PA4, PA7
+    0x00880052, // i=22 (10110) -> Set PA1, PA4, PA6
+    0x000800D2, // i=23 (10111) -> Set PA1, PA4, PA6, PA7
+    0x00D0000A, // i=24 (11000) -> Set PA1, PA3
+    0x0050008A, // i=25 (11001) -> Set PA1, PA3, PA7
+    0x0090004A, // i=26 (11010) -> Set PA1, PA3, PA6
+    0x001000CA, // i=27 (11011) -> Set PA1, PA3, PA6, PA7
+    0x00C0001A, // i=28 (11100) -> Set PA1, PA3, PA4
+    0x0040009A, // i=29 (11101) -> Set PA1, PA3, PA4, PA7
+    0x0080005A, // i=30 (11110) -> Set PA1, PA3, PA4, PA6
+    0x000000DA  // i=31 (11111) -> Set PA1, PA3, PA4, PA6, PA7
 };
 
 void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
@@ -156,6 +156,7 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 
 			break;
 
+		// ------ comando debug colori led ------ //
 		case 'k':
 
 			if (data_received[1] == 'g')
@@ -175,6 +176,7 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 				GET_ADC_VALUES();
 			break;
 
+		// ------ Serial or Bluetooth Communication ------ //
 		case 'C':
 
 				HAL_LPTIM_Counter_Start_IT(&hlptim1);
@@ -193,6 +195,7 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 
 			break;
 
+		// ------ Only Bluetooth communication ------ //
 		case 'B':
 				HAL_LPTIM_Counter_Start_IT(&hlptim1);
 
@@ -202,6 +205,7 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 			break;
 
 
+		// ------ Averaging Window Size ------ //
 		case 'V':
 
 		    if (len <= 1)
@@ -234,7 +238,7 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 
 		break;
 
-		// --- NUOVO COMANDO PER SD ---
+		// ------ SD savte to file ------ //
 		case 'S': // 'S' come Save o SD
 
 			// Se invii "S" dalla GUI, prova a scrivere il file
@@ -247,6 +251,36 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 
 			break;
 
+		// ------ Dust Clock Frequency selection ------ //
+		case 'K':
+
+			if (len >= 2 && data_received[1] == '5') //50kHz
+			{
+				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET); //A0 = 0
+				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_RESET); //A1 = 0
+			}
+			else if(len >= 2 && data_received[1] == '4') //400kHz
+			{
+				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET); //A0 = 0
+				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_SET); //A1 = 1
+			}
+			else //200kHz
+			{
+				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_SET); //A0 = 1
+				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_RESET); //A1 = 0
+			}
+			break;
+
+
+		case 'M':
+
+			if(len >= 2 && data_received[1] == 'A')
+				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET); //Automatic channel selection and iteration
+			else
+				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET); //Manual Channel selection and iteration
+
+			break;
+		// ------ Reset ALL ------ //
 		case '0':
 			HAL_LPTIM_Counter_Stop_IT(&hlptim1);
 			g_ble_dust_stream_enabled = 0;
@@ -273,9 +307,9 @@ static inline void CHANNEL_SET_Init(void)
 
 static inline void CHANNEL_SET(uint8_t channel)
 {
-	channel &= 0x1F; //keep only 5 LSB bits
+	//channel &= 0x1F; //keep only 5 LSB bits
 
-	GPIOA->BSRR = bsrrA[channel]; //select dust sensor channel
+	GPIOA->BSRR = bsrrA[channel & 0x1F]; //select dust sensor channel
 }
 
 void LED_BLINKING(const uint32_t LED_COLOR, uint16_t *pwm_buffer)

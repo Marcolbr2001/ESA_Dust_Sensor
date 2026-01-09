@@ -269,18 +269,18 @@ class SettingsTab(ctk.CTkFrame):
         """Invia '5', '20' o '40' a seconda del radio selezionato."""
         val = self.clock_var.get()
         if val == "50":
-            self._send_bt(b"5")
+            self._send_bt(b"K5")
         elif val == "200":
-            self._send_bt(b"20")
+            self._send_bt(b"K20")
         elif val == "400":
-            self._send_bt(b"40")
+            self._send_bt(b"K40")
 
     def _on_read_mode_changed(self):
-        """Invia 'A' se Auto, 'M' se Manual."""
+        """Invia 'MA' se Auto, 'MM' se Manual."""
         if self.read_auto_var.get():
-            self._send_bt(b"A")
+            self._send_bt(b"MA")
         else:
-            self._send_bt(b"M")
+            self._send_bt(b"MM")
 
     def _on_refresh_changed(self, selection: str):
         """
