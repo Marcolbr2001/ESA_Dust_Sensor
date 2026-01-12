@@ -60,6 +60,8 @@ uint8_t g_enable_sd_saving = 0;
 extern uint8_t g_ram_buffer[];
 extern uint32_t g_ram_head;
 
+volatile uint8_t dcc_sel_ck = 0;
+
 // -------------------- strutture dati per canali ------ //
 typedef enum
 {
@@ -271,14 +273,25 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 			}
 			break;
 
-
+		// ------ Automatic or Manual channel iteration
 		case 'M':
 
 			if(len >= 2 && data_received[1] == 'A')
+			{
 				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET); //Automatic channel selection and iteration
+				Config_PA7_As_PWM();
+				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_SET); // Reset canale corrente a 0
+				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_RESET); // Il segnale reset torna basso
+				next_ch = 0u;
+				dcc_sel_ck = 1; // flag automatic
+			}
 			else
+			{
 				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET); //Manual Channel selection and iteration
-
+				Config_PA7_As_GPIO();
+				next_ch = 0u;
+				dcc_sel_ck = 0;	// flag manual
+			}
 			break;
 		// ------ Reset ALL ------ //
 		case '0':
@@ -391,10 +404,12 @@ void HAL_LPTIM_AutoReloadMatchCallback(LPTIM_HandleTypeDef *hlptim)
 {
 	//HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_1); DEBUG
 
-    // Selecting prossimo canale SW e HW --> POI LI METTO INSIEME
+    // Se la lettura canali è manuale -> Selecting prossimo canale SW e HW --> POI LI METTO INSIEME
+	if(dcc_sel_ck == 0)
+	{
+		CHANNEL_SET(next_ch);
+	}
 	DUST_SetCurrentChannel(next_ch);
-    CHANNEL_SET(next_ch);
-
 	GET_ADC_VALUES_continous();
 
 }
@@ -404,14 +419,13 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
     if (hspi->Instance == SPI3)
     {
         // 1. FINE LETTURA: Riporta il pin CONVST (CS) HIGH
-        // Questo fa tornare DOUT in 3-state e l'ADC in fase di Acquisizione.
+        // DOUT torna in 3-state e l'ADC in fase di Acquisizione.
         //HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);
 
         uint16_t adc_val = Rx_Data_Buffer[0];
         uint32_t now_ms  = HAL_GetTick();
 
         //adc_val = adc_val + 1; DEBUG
-        // Passo il sample al modulo dust (usa g_current_channel interno)
         DUST_Process(g_current_channel, adc_val, now_ms);
 
         next_ch++;
@@ -832,4 +846,41 @@ uint16_t DUST_BuildFrame_RAM(uint8_t *dst, uint16_t max_len)
     return (uint16_t)(p - dst);
     //HAL_UART_Transmit_DMA(&huart1, uart_frame, total_len);
 
+}
+
+void Config_PA7_As_GPIO(void)
+{
+    // 1. Ferma il PWM per sicurezza
+    HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_3);
+
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    // 2. Configura PA7 come Output normale (Manual Mode)
+    GPIO_InitStruct.Pin = S0_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP; // Push-Pull normale
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    // Imposta uno stato iniziale (es. basso)
+    HAL_GPIO_WritePin(GPIOA, S0_Pin, GPIO_PIN_RESET);
+}
+
+void Config_PA7_As_PWM(void)
+{
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    // 1. Configura PA7 come Alternate Function (Auto Mode)
+    GPIO_InitStruct.Pin = S0_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP; // Push-Pull controllato dal Timer
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    GPIO_InitStruct.Alternate = GPIO_AF2_TIM2; // Collega PA7 a TIM2_CH3
+
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    // 2. Avvia il PWM
+    // Assicurati che htim2 sia stato inizializzato nel main con le frequenze giuste
+    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
 }

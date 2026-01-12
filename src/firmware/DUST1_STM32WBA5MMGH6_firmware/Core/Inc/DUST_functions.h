@@ -35,10 +35,13 @@ extern TIM_HandleTypeDef htim3;
 extern LPTIM_HandleTypeDef hlptim1;
 extern SPI_HandleTypeDef hspi3;
 extern TIM_HandleTypeDef htim1;
+extern TIM_HandleTypeDef htim2;
 
 
 extern volatile uint8_t g_ble_dust_stream_enabled;
 extern volatile uint8_t g_usb_dust_stream_enabled;
+
+extern volatile uint8_t dcc_sel_ck;
 
 //extern uint16_t pwm_buf[] = {13000, 13000, 0, 0, 0, 0, 0, 0, 0, 0}; //to use in case of PWM DMA
 
@@ -48,8 +51,12 @@ static inline void CHANNEL_SET_Init(void);
 void LED_BLINKING(const uint32_t LED_COLOR, uint16_t *pwm_buf);
 void GET_ADC_VALUES();
 void GET_ADC_VALUES_continous();
+void DUST_Process(uint8_t channel, uint16_t raw_sample, uint32_t timestamp_ms);
 extern void SD_Write_Buffer(uint8_t *pData, uint32_t length);
 void DUST_Save_To_Ram(uint8_t *new_data, uint16_t data_len);
+void Config_PA7_As_GPIO(void);
+void Config_PA7_As_PWM(void);
+
 
 typedef struct
 {
