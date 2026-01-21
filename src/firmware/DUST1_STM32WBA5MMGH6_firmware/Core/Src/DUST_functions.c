@@ -7,7 +7,7 @@
 #include "ble_sensor_app.h"
 #include "ble_sensor.h"
 #include "stm32_rtos.h"
-
+#include "stdlib.h" // Serve per abs()
 
 #include "string.h"
 #include "stm32_timer.h"
@@ -27,9 +27,11 @@
 #define FRAME_SYNC2   0x55
 #define PKT_SYNC_CAN  0xA5
 
+#define DUST_WARMUP_SAMPLES  150u  // Ignora i primi 150 campioni (circa 1-3 secondi a seconda del clock)
 
 uint16_t adc_val = 0;
 uint8_t dust_mavg_window = 4u;   // moving average over N samples (to be tuned)
+uint16_t dust_thresh_offset = 50u;
 // Buffer di prova (array di uint8_t)
 uint8_t test_message[] = "UART DMA TEST: Linea Operativa\r\n";
 uint16_t message_size = sizeof(test_message) - 1;
@@ -95,6 +97,9 @@ typedef struct
 
     // Contatore particelle per canale
     uint8_t particle_count;
+
+    uint16_t warmup_cnt; // Contatore per il riscaldamento iniziale
+
 } DustChannelState_t;
 
 static DustChannelState_t   g_ch[DUST_CHANNELS];
@@ -293,6 +298,37 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 				dcc_sel_ck = 0;	// flag manual
 			}
 			break;
+
+		// ------ Offset Dust Signal Configuration ------ //
+		case 'O':
+
+		    if (len <= 1)
+		    {
+		        // Nessun numero dopo 'V', ignoro
+		        break;
+		    }
+		    else
+		    {
+
+			    char tmp[4];  // max 3 cifre + '\0'
+			    uint16_t num_bytes = len - 1;
+
+			    // Limito il numero di byte copiati a sizeof(tmp)-1
+			    if (num_bytes > (sizeof(tmp) - 1))
+			    {
+			        num_bytes = sizeof(tmp) - 1;
+			    }
+
+				memcpy(tmp, &data_received[1], num_bytes);
+			    tmp[num_bytes] = '\0';
+
+			    int val = atoi(tmp);
+
+			    dust_thresh_offset = val;
+			}
+
+			break;
+
 		// ------ Reset ALL ------ //
 		case '0':
 			HAL_LPTIM_Counter_Stop_IT(&hlptim1);
@@ -485,6 +521,7 @@ static void DUST_Internal_ResetChannel(DustChannelState_t *s)
     s->event_len       = 0u;
     s->event_timestamp_ms = 0u;
     s->particle_count  = 0u;
+    s->warmup_cnt        = 0u;
 }
 
 // Moving average su una finestra di DUST_MAVG_WINDOW campioni
@@ -593,115 +630,130 @@ void DUST_SetCurrentChannel(uint8_t ch)
 void DUST_Process(uint8_t channel, uint16_t raw_sample, uint32_t timestamp_ms)
 {
     uint8_t ch = channel;
-    if (ch >= DUST_CHANNELS)
-        return;
+    if (ch >= DUST_CHANNELS) return;
 
     DustChannelState_t *s = &g_ch[ch];
 
-    // 1) Moving average
+    // 1) Moving average (Sempre attiva per pulire il segnale)
     uint16_t filtered = DUST_Internal_MAVG_Update(s, raw_sample);
     s->last_raw = raw_sample;
 
-    // 2) Baseline lenta solo quando non siamo in evento
-    if (s->state == DUST_STATE_MONITORING)
+    // --- WARM-UP ---
+    // All'avvio non sappiamo dove sia il segnale. Per i primi campioni
+    // ci limitiamo a inseguirlo per trovare il punto di partenza.
+    if (s->warmup_cnt < DUST_WARMUP_SAMPLES)
     {
-        s->baseline = DUST_Internal_Baseline_Update(s->baseline,
-                                                    filtered,
-                                                    DUST_BASE_SHIFT);
+        s->warmup_cnt++;
+        s->baseline = filtered;
+        s->state = DUST_STATE_MONITORING;
+        s->over_cnt = 0;
+        return;
     }
 
-    // 3) Calcolo soglie (isteresi)
-    uint16_t thr_high = (uint16_t)(s->baseline + DUST_THRESH_OFFSET);
-    uint16_t thr_low  = (uint16_t)(s->baseline + (DUST_THRESH_OFFSET / 2u));
+    // Calcoliamo la differenza ASSOLUTA (per vedere sia salite che discese)
+    // Cast a int32_t per gestire valori negativi prima dell'abs
+    int32_t diff = (int32_t)filtered - (int32_t)s->baseline;
+    uint16_t abs_diff = (uint16_t)abs(diff);
 
     // 4) State machine
     switch (s->state)
     {
         case DUST_STATE_MONITORING:
         {
-            if (filtered > thr_high)
+            // Se c'è un salto brusco (in alto O in basso) maggiore della soglia
+            if (abs_diff > dust_thresh_offset)
             {
                 if (s->over_cnt < 255u) s->over_cnt++;
 
+                // Se il salto persiste per un po' (filtro spike veloci)
                 if (s->over_cnt >= DUST_MIN_OVER_SAMPLES)
                 {
-                    // Inizio nuovo evento
                     s->state              = DUST_STATE_CONFIRMING;
                     s->over_cnt           = 0u;
-                    s->under_cnt          = 0u;
+                    // Reset buffer evento
                     s->event_len          = 0u;
                     s->event_timestamp_ms = timestamp_ms;
-
-                    // Primo sample dell'evento
-                    if (s->event_len < DUST_EVENT_SAMPLES)
-                    {
-                        s->event_buf[s->event_len++] = filtered;
-                    }
                 }
             }
             else
             {
                 s->over_cnt = 0u;
+
+                // Se il segnale è stabile (nessun salto), aggiorniamo LENTAMENTE la baseline
+                // per inseguire la deriva termica (Drift)
+                s->baseline = DUST_Internal_Baseline_Update(s->baseline,
+                                                            filtered,
+                                                            DUST_BASE_SHIFT);
             }
         } break;
 
         case DUST_STATE_CONFIRMING:
         {
-
-            // Se il segnale resta alto, contyinuo a confermare l'evento
-            if (filtered > thr_high)
+            // Continuiamo a verificare se il segnale è ancora "lontano" dalla vecchia baseline
+            // Questo gestisce il fatto che il fronte di salita dura 4-5 campioni
+            if (abs_diff > dust_thresh_offset)
             {
-            
                 if (s->over_cnt < 255u) s->over_cnt++;
 
-                if (s->over_cnt >= 4u)   // se trovo 5 campioni alti
+                // Se persiste per 4 campioni, è un gradino confermato!
+                if (s->over_cnt >= 4u)
                 {
-                    // Confermo definitivamente, particella rivelata
-                    s->state        = DUST_STATE_FOUND;
-                    s->over_cnt     = 0u;
-                    s->under_cnt    = 0u;
+                    // 1. CONTIAMO LA PARTICELLA
                     s->particle_count++;
 
-                    // salvo sample
-                    if (s->event_len < DUST_EVENT_SAMPLES)
-                    {
-                        s->event_buf[s->event_len++] = filtered;
-                    }
+                    // 2. CAMBIAMO STATO
+                    // Non andiamo in MONITORING, ma in FOUND/STABILIZING
+                    // per assorbire il resto della salita/discesa e aggiornare il riferimento.
+                    s->state = DUST_STATE_FOUND;
 
-                    // contatore di assestamento
-                    s->refr_cnt = 1;  // ad es. 4 o 5
+                    // Impostiamo un tempo morto (Dead Time) in cui inseguiamo il segnale
+                    // 10 campioni dovrebbero bastare per far finire la transizione del gradino
+                    s->refr_cnt = 10;
+
+                    // Salva dati evento
+                    if (s->event_len < DUST_EVENT_SAMPLES) s->event_buf[s->event_len++] = filtered;
                 }
             }
             else
             {
-                // Il segnale e' tornato basso, quindi era solo picco di rumore
-                s->state    = DUST_STATE_MONITORING;
+                // Era solo un rumore momentaneo, torniamo a monitorare
+                s->state = DUST_STATE_MONITORING;
                 s->over_cnt = 0u;
-                s->event_len = 0u;
             }
 
         } break;
 
         case DUST_STATE_FOUND:
         {
-            // Eventi di assestamento
-            if (s->event_len < DUST_EVENT_SAMPLES)
-            {
-                s->event_buf[s->event_len++] = filtered;
-            }
+            // --- FASE DI ASSESTAMENTO (LATCHING) ---
+            // In questa fase sappiamo che il segnale è cambiato livello.
+            // Dobbiamo aggiornare la baseline al NUOVO livello.
 
+            // 1. Aggiornamento forzato della baseline
+            // Facciamo sì che la baseline "insegua" velocemente il segnale mentre finisce di salire/scendere
+            s->baseline = filtered;
+
+            // 2. Decremento timer
             if (s->refr_cnt > 0u)
             {
                 s->refr_cnt--;
             }
             else
             {
-                // Fine del periodo di assestamento, l'evento si conclude e viene registrato con un callback
-                s->state     = DUST_STATE_MONITORING;
-                s->over_cnt  = 0u;
-                s->under_cnt = 0u;
+                // Fine del tempo di assestamento.
+                // Ora la baseline è allineata al nuovo livello del gradino.
+                // Possiamo tornare a cercare nuove variazioni rispetto a QUESTO nuovo livello.
+                s->state = DUST_STATE_MONITORING;
+                s->over_cnt = 0u;
 
+                // Callback evento completato
                 DUST_Internal_CallCallback(ch, s);
+            }
+
+            // Salvataggio campioni per debug
+            if (s->event_len < DUST_EVENT_SAMPLES)
+            {
+                s->event_buf[s->event_len++] = filtered;
             }
 
         } break;
@@ -848,39 +900,60 @@ uint16_t DUST_BuildFrame_RAM(uint8_t *dst, uint16_t max_len)
 
 }
 
+// Funzione per passare alla modalità MANUALE (GPIO)
 void Config_PA7_As_GPIO(void)
 {
-    // 1. Ferma il PWM per sicurezza
+    // 1. Ferma il Timer per sicurezza
     HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_3);
 
+    // 2. Riconfigura il pin come GPIO Output Standard
     GPIO_InitTypeDef GPIO_InitStruct = {0};
-
-    // 2. Configura PA7 come Output normale (Manual Mode)
-    GPIO_InitStruct.Pin = S0_Pin;
-    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP; // Push-Pull normale
+    GPIO_InitStruct.Pin = GPIO_PIN_7;           // Usa PIN 7 diretto
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP; // Push-Pull normale (NO Alternate Function)
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
 
     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-    // Imposta uno stato iniziale (es. basso)
-    HAL_GPIO_WritePin(GPIOA, S0_Pin, GPIO_PIN_RESET);
+    // 3. Imposta lo stato iniziale a 0 (LOW)
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_RESET);
 }
 
+// Funzione per passare alla modalità AUTOMATICA (PWM 4kHz)
 void Config_PA7_As_PWM(void)
 {
-    GPIO_InitTypeDef GPIO_InitStruct = {0};
+    // 1. Assicuriamoci che i Clock siano attivi (serve se arriviamo da uno stop)
+    __HAL_RCC_TIM2_CLK_ENABLE();
+    __HAL_RCC_GPIOA_CLK_ENABLE();
 
-    // 1. Configura PA7 come Alternate Function (Auto Mode)
-    GPIO_InitStruct.Pin = S0_Pin;
-    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP; // Push-Pull controllato dal Timer
+    // 2. Riconfigura il pin come ALTERNATE FUNCTION (lo colleghiamo al Timer)
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+    GPIO_InitStruct.Pin = GPIO_PIN_7;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;      // Modalità Alternate Function
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    GPIO_InitStruct.Alternate = GPIO_AF2_TIM2; // Collega PA7 a TIM2_CH3
-
+    GPIO_InitStruct.Alternate = GPIO_AF1_TIM2;   // Mappa su TIM2_CH3
     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-    // 2. Avvia il PWM
-    // Assicurati che htim2 sia stato inizializzato nel main con le frequenze giuste
+    // 3. Configura il Timer per 250us @ 96MHz
+    // Prescaler 95 -> 96MHz / 96 = 1 MHz (1 tick = 1us)
+    __HAL_TIM_SET_PRESCALER(&htim2, 95);
+
+    // Periodo 249 -> 250 tick totali = 250us
+    __HAL_TIM_SET_AUTORELOAD(&htim2, 249);
+
+    // 4. Configura il Canale PWM (Duty 50%)
+    TIM_OC_InitTypeDef sConfigOC = {0};
+    sConfigOC.OCMode = TIM_OCMODE_PWM1;
+    sConfigOC.Pulse = 125; // 125us Alto, 125us Basso
+    sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+    sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+
+    // Applica configurazione al canale
+    HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_3);
+
+    // 5. Reset e Start
+    __HAL_TIM_SET_COUNTER(&htim2, 0);
+    HAL_TIM_GenerateEvent(&htim2, TIM_EVENTSOURCE_UPDATE); // Applica subito Prescaler
     HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
 }

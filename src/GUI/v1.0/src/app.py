@@ -1,0 +1,551 @@
+# app.py
+import sys
+import os
+from PIL import Image
+import customtkinter as ctk
+import time
+import serial
+from serial.tools import list_ports
+import asyncio
+import threading
+from bleak import BleakScanner, BleakClient
+from connection_tab import ConnectionTab
+from visual_tab import VisualTab
+from advanced_tab import AdvancedTab
+from settings_tab import SettingsTab
+from collections import deque
+import datetime 
+
+# --------- UUID BLE ---------
+BT_SERVICE_UUID       = "00000000-0001-11e1-9ab4-0002a5d5c51b"
+BT_CHAR_MYDATA_UUID   = "00c00000-0001-11e1-ac36-0002a5d5c51b"  # notify
+BT_CHAR_RECVDATA_UUID = "00c10000-0001-11e1-ac36-0002a5d5c51b"  # write
+
+# --------- Costanti protocollo DUST ---------
+DUST_CHANNELS = 32
+FRAME_SYNC1 = 0xAA
+FRAME_SYNC2 = 0x55
+# PKT_SYNC_CAN = 0xA5 # Non usato in questo protocollo compatto
+# Lunghezza frame: Header(2) + 32 canali * 3 byte (Part + MSB + LSB) + Footer(2)
+FRAME_LEN = 2 + (DUST_CHANNELS * 3) + 2  # Totale 100 bytes
+
+
+def resource_path(relative_path):
+    """ 
+    Ottiene il percorso assoluto alle risorse.
+    Funziona sia in modalità sviluppo che dopo essere stato compilato con PyInstaller via sys._MEIPASS 
+    """
+    try:
+        # PyInstaller crea una cartella temporanea in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+
+
+class App(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+
+        # Profiling semplice delle prestazioni
+        self._profile_last_log = time.perf_counter()
+        self._profile_frame_count = 0
+        self._profile_last_frame_ms = 0.0
+        self._profile_total_frame_ms = 0.0
+
+        # Throttling del disegno grafici
+        self._last_draw_time = 0.0
+        self._min_draw_interval = 0.1  # 40 ms ≈ 25 Hz di refresh grafico
+        
+        # --- GESTIONE LOG SU FILE ---
+        self.is_logging = False
+        self.log_file = None
+        # ---------------------------- #
+
+        self.title("DUST Monitor")
+        self.geometry("1000x650")
+        self.minsize(800, 500)
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("dark-blue")
+
+        # ----- Barra superiore con loghi dipendenti dal tema (MODIFICATO PER EXE) -----
+        # Nota: usiamo resource_path per supportare l'eseguibile standalone
+        try:
+            # LEFT logo: light + dark
+            left_light = Image.open(resource_path(os.path.join("img", "polimiD.png")))
+            left_dark = Image.open(resource_path(os.path.join("img", "polimiW.png")))
+            self.logo_l = ctk.CTkImage(
+                light_image=left_light,
+                dark_image=left_dark,
+                size=(190, 60),
+            )
+
+            # CENTER logo: light + dark
+            center_light = Image.open(resource_path(os.path.join("img", "ESA_White.png")))
+            center_dark = Image.open(resource_path(os.path.join("img", "ESA_White.png")))
+            self.logo_c = ctk.CTkImage(
+                light_image=center_light,
+                dark_image=center_dark,
+                size=(60, 60),
+            )
+
+            # RIGHT logo: light + dark
+            right_light = Image.open(resource_path(os.path.join("img", "i3n.png")))
+            right_dark = Image.open(resource_path(os.path.join("img", "i3nW.png")))
+            self.logo_r = ctk.CTkImage(
+                light_image=right_light,
+                dark_image=right_dark,
+                size=(200, 48),
+            )
+        except Exception as e:
+            print("Errore nel caricamento dei loghi:", e)
+            self.logo_l = None
+            self.logo_r = None
+
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.pack(side="top", fill="x", padx=10, pady=(5, 0))
+        header.grid_rowconfigure(0, weight=1)
+        header.grid_columnconfigure(0, weight=0)
+        header.grid_columnconfigure(1, weight=1)
+        header.grid_columnconfigure(2, weight=0)
+
+        if self.logo_l is not None:
+            left_logo_label = ctk.CTkLabel(header, text="", image=self.logo_l)
+            left_logo_label.grid(row=0, column=0, sticky="w")
+
+        # TITOLO al centro della colonna 1 (niente sticky → centrato)
+        title_label = ctk.CTkLabel(
+            header,
+            text="DUST Tracker Monitor",
+            font=ctk.CTkFont(family="Segoe UI", size=32, weight="bold"),
+            anchor="center",
+        )
+        title_label.grid(row=0, column=1, pady=(10, 10), padx=(120, 0))
+
+        # Frame a destra che contiene i due loghi (ESA + i3n)
+        if self.logo_c is not None or self.logo_r is not None:
+            right_frame = ctk.CTkFrame(header, fg_color="transparent")
+            right_frame.grid(row=0, column=2, sticky="e", padx=(0, 10))
+
+            if self.logo_c is not None:
+                center_logo_label = ctk.CTkLabel(right_frame, text="", image=self.logo_c)
+                center_logo_label.pack(side="left", padx=(0, 30))
+
+            if self.logo_r is not None:
+                right_logo_label = ctk.CTkLabel(right_frame, text="", image=self.logo_r)
+                right_logo_label.pack(side="left")
+
+
+        # --- Serial e BLE ---
+        self.serial = None
+        self.ble_client = None
+        self._bt_scan_results = {}
+
+        # Event loop BLE dedicato
+        self.ble_loop = asyncio.new_event_loop()
+        self.ble_thread = threading.Thread(target=self._ble_loop_runner, daemon=True)
+        self.ble_thread.start()
+
+        # Buffer e dati
+        self._dust_rx_buffer = bytearray()
+        self.channel_values = [0 for _ in range(DUST_CHANNELS)]
+        self.channel_particles = [0 for _ in range(DUST_CHANNELS)]
+        self.global_count = 0
+        self.channel_history = [deque(maxlen=200) for _ in range(DUST_CHANNELS)]
+
+        # GUI
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+        self.tabview = ctk.CTkTabview(self)
+        self.tabview.pack(fill="both", expand=True, padx=10, pady=10)
+
+        self.tab_connection_page = self.tabview.add("Connection")
+        self.tab_visual_page = self.tabview.add("Global")
+        self.tab_advanced_page = self.tabview.add("Channels")
+        self.tab_settings_page = self.tabview.add("Dashboard")
+
+        self.connection_tab = ConnectionTab(self.tab_connection_page, controller=self)
+        self.connection_tab.pack(fill="both", expand=True)
+        self.visual_tab = VisualTab(self.tab_visual_page, controller=self)
+        self.visual_tab.pack(fill="both", expand=True)
+        self.advanced_tab = AdvancedTab(
+            self.tab_advanced_page, controller=self, num_channels=DUST_CHANNELS
+        )
+        self.advanced_tab.pack(fill="both", expand=True)
+        self.settings_tab = SettingsTab(self.tab_settings_page, controller=self)
+        self.settings_tab.pack(fill="both", expand=True)
+
+        self._refresh_serial_ports()
+
+    # ---------- GESTIONE FILE LOG ----------
+    def set_logging_state(self, active: bool):
+        """
+        Attiva o disattiva il salvataggio su file.
+        Chiamato dallo switch nella tab Channels.
+        """
+        if active:
+            if not self.is_logging:
+                try:
+                    # Crea nome file con timestamp
+                    now = datetime.datetime.now()
+                    timestamp = now.strftime("%Y-%m-%d_%H-%M-%S")
+                    filename = f"dust_log_{timestamp}.txt"
+                    
+                    self.log_file = open(filename, "w")
+                    self.is_logging = True
+                    self._log(f"[LOG] File logging started: {filename}")
+                except Exception as e:
+                    self._log(f"[LOG] Error creating file: {e}")
+                    self.is_logging = False
+        else:
+            if self.is_logging and self.log_file:
+                try:
+                    self.log_file.close()
+                    self._log("[LOG] File logging stopped and saved.")
+                except Exception as e:
+                    self._log(f"[LOG] Error closing file: {e}")
+                finally:
+                    self.log_file = None
+                    self.is_logging = False
+
+    # ---------- BLE loop ----------
+    def _ble_loop_runner(self):
+        asyncio.set_event_loop(self.ble_loop)
+        self.ble_loop.run_forever()
+
+    # ---------- Log ----------
+    def _log(self, text: str):
+        self.connection_tab.log(text)
+
+    # ---------- Serial ----------
+    def _get_serial_ports(self):
+        ports = list_ports.comports()
+        return [p.device for p in ports] or ["No ports found"]
+
+    def _refresh_serial_ports(self):
+        ports = self._get_serial_ports()
+        self.connection_tab.set_serial_ports(ports)
+        self._log("[INFO] Serial ports refreshed")
+
+    # ---------- BLE SCAN ----------
+    def _on_bt_scan(self):
+        self._log("[BT] Scanning for BLE devices...")
+
+        async def do_scan():
+            devices = await BleakScanner.discover(timeout=3.0)
+            dust_devices = [d for d in devices if d.name and d.name.startswith("DUST_")]
+            addr_map = {d.name: d.address for d in dust_devices}
+            names = list(addr_map.keys())
+            return names, addr_map
+
+        future = asyncio.run_coroutine_threadsafe(do_scan(), self.ble_loop)
+
+        def done_cb(fut):
+            try:
+                names, addr_map = fut.result()
+            except Exception as err:
+                self.after(0, lambda e: self._log(f"[BT] Scan error: {err}"))
+                return
+
+            def update_ui():
+                self._bt_scan_results = addr_map
+                self.connection_tab.set_bt_devices(names)
+                if names:
+                    self._log(f"[BT] Found: {', '.join(names)}")
+                else:
+                    self._log("[BT] No DUST_ devices found")
+
+            self.after(0, update_ui)
+
+        future.add_done_callback(done_cb)
+
+    # ---------- BLE CONNECT ----------
+    def _on_bt_connect(self):
+        # Se già connesso -> disconnette
+        if self.ble_client is not None:
+            self._log("[BT] Disconnecting...")
+            future = asyncio.run_coroutine_threadsafe(self._bt_disconnect_async(), self.ble_loop)
+
+            def done_cb(fut):
+                try:
+                    fut.result()
+                except Exception as err:
+                    self.after(0, lambda: self._log(f"[BT] Disconnect error: {err}"))
+                else:
+                    self.after(0, lambda: self._log("[BT] Disconnected"))
+                finally:
+                    self.ble_client = None
+
+            future.add_done_callback(done_cb)
+            return
+
+        # Altrimenti connetti
+        name = self.connection_tab.get_bt_selection()
+        if not name or name.startswith("Press") or name.startswith("No DUST"):
+            self._log("[BT] Please scan and select a valid device")
+            return
+
+        address = self._bt_scan_results.get(name)
+        if not address:
+            self._log(f"[BT] No address for device '{name}' (scan again)")
+            return
+
+        self._log(f"[BT] Connecting to {name} ({address})...")
+
+        future = asyncio.run_coroutine_threadsafe(self._bt_connect_async(address), self.ble_loop)
+
+        def done_cb(fut):
+            try:
+                ok = fut.result()
+            except Exception as err:
+                self.after(0, lambda: self._log(f"[BT] Connect error: {err}"))
+                return
+
+            if ok:
+                self.after(0, lambda: self._log("[BT] Connected successfully"))
+            else:
+                self.after(0, lambda: self._log("[BT] Connection failed"))
+
+        future.add_done_callback(done_cb)
+
+    async def _bt_connect_async(self, address: str) -> bool:
+        """Connessione BLE e start_notify."""
+        try:
+            client = BleakClient(address)
+            await client.connect()
+            await asyncio.sleep(0.4)  # stabilizza connessione GATT
+            if not client.is_connected:
+                return False
+
+            self.ble_client = client
+            try:
+                await client.start_notify(BT_CHAR_MYDATA_UUID, self._bt_notification_handler)
+            except Exception as err:
+                await asyncio.sleep(0.5)
+                try:
+                    await client.start_notify(BT_CHAR_MYDATA_UUID, self._bt_notification_handler)
+                except Exception as err2:
+                    self.after(0, lambda: self._log(f"[BT] start_notify error: {err2}"))
+                    return False
+
+            return True
+
+        except Exception as e:
+            self.after(0, lambda: self._log(f"[BT] Connect exception: {e}"))
+            return False
+
+    async def _bt_disconnect_async(self):
+        if self.ble_client is not None:
+            try:
+                try:
+                    await self.ble_client.stop_notify(BT_CHAR_MYDATA_UUID)
+                except Exception:
+                    pass
+                await self.ble_client.disconnect()
+            except Exception:
+                pass
+            self.ble_client = None
+
+    # ---------- INVIO COMANDI ----------
+    def _bt_send_command(self, cmd_byte: bytes):
+        if self.ble_client is None or not self.ble_client.is_connected:
+            self._log("[BT] Not connected, cannot send command")
+            return
+
+        self._log(f"[BT] Sending command {cmd_byte!r}")
+
+        async def do_write():
+            await self.ble_client.write_gatt_char(BT_CHAR_RECVDATA_UUID, cmd_byte, response=True)
+
+        future = asyncio.run_coroutine_threadsafe(do_write(), self.ble_loop)
+
+        def done_cb(fut):
+            try:
+                fut.result()
+            except Exception as err:
+                self.after(0, lambda: self._log(f"[BT] Write error: {err}"))
+            else:
+                self.after(0, lambda: self._log("[BT] Command sent OK"))
+
+        future.add_done_callback(done_cb)
+
+    def _on_send_text(self, text: str):
+        if not text:
+            self._log("[CMD] Empty command")
+            return
+        self._bt_send_command(text.encode("ascii", errors="ignore"))
+
+    def _on_start_acquisition(self):
+        self._bt_send_command(b'Cb')
+
+    def _on_stop_acquisition(self):
+        self._bt_send_command(b'0')
+
+    # ---------- NOTIFY HANDLER ----------
+    def _bt_notification_handler(self, sender, data: bytes):
+        hex_str = " ".join(f"{b:02X}" for b in data)
+        data_copy = bytes(data)
+        self.after(0, lambda: self._handle_bt_message(hex_str, data_copy))
+
+    def _handle_bt_message(self, hex_text: str, raw: bytes):
+        # 1. Log a video
+        self._log(f"[BT RX] {hex_text}")
+
+        # 2. Salvataggio su file
+        if self.is_logging and self.log_file:
+            try:
+                # Scriviamo la stringa hex esattamente come appare nel log
+                self.log_file.write(hex_text + "\n")
+                self.log_file.flush()
+            except Exception:
+                pass
+        
+        # 3. Parsing
+        self._append_dust_bytes(raw)
+
+    # ---------- PARSING FRAME DUST ----------
+    def _append_dust_bytes(self, data: bytes):
+        buf = self._dust_rx_buffer
+        buf.extend(data)
+
+        while True:
+            # serve almeno AA 55
+            if len(buf) < 2:
+                return
+
+            # cerca la sequenza di sync
+            start = -1
+            for i in range(len(buf) - 1):
+                if buf[i] == FRAME_SYNC1 and buf[i + 1] == FRAME_SYNC2:
+                    start = i
+                    break
+
+            if start < 0:
+                # nessun sync trovato, butto tutto
+                buf.clear()
+                return
+
+            if start > 0:
+                # scarto eventuale spazzatura prima del sync
+                del buf[:start]
+
+            # se non ho ancora tutto il frame, esco
+            if len(buf) < FRAME_LEN:
+                return
+
+            candidate = buf[:FRAME_LEN]
+
+            # controllo terminazione \r\n
+            if not (candidate[-2] == 0x0D and candidate[-1] == 0x0A):
+                # pacchetto corrotto: scarto il primo byte e riprovo
+                del buf[0]
+                continue
+
+            adc_values = [0] * DUST_CHANNELS
+            particles_values = [0] * DUST_CHANNELS
+            
+            # Parsing dei 32 blocchi da 3 byte: [Particelle, MSB, LSB]
+            for k in range(DUST_CHANNELS):
+                off = 2 + (k * 3) # Offset: 2 byte header + k * 3 byte block
+
+                # Byte 1: Particle Count
+                particles = candidate[off]
+                
+                # Byte 2 (MSB) e Byte 3 (LSB) -> ADC 16 bit
+                raw = (candidate[off + 1] << 8) | candidate[off + 2]
+                
+                # Conversione complemento a due se necessario (signed 16 bit)
+                if raw & 0x8000:
+                    raw -= 0x10000       
+
+                adc = abs(raw) # Modulo
+
+                if 0 <= k < DUST_CHANNELS:
+                    adc_values[k] = adc
+                    particles_values[k] = particles
+
+            # inoltra il frame al resto della GUI
+            self._handle_dust_frame(adc_values, particles_values)
+
+            # rimuove il frame dal buffer e, se avanzano byte, ricomincia
+            del buf[:FRAME_LEN]
+
+    def _handle_dust_frame(self, adc_values, particles_values):
+        """
+        Viene chiamata ad ogni frame BLE.
+        """
+        now = time.perf_counter()
+
+        # 1) Aggiorno SEMPRE i valori interni per tutti i canali
+        for ch in range(min(DUST_CHANNELS, len(adc_values))):
+            adc = adc_values[ch]
+            particles = particles_values[ch]
+
+            self.channel_values[ch] = adc
+            self.channel_particles[ch] = particles
+
+        # Conteggio globale particelle
+        if particles_values:
+            global_particles = sum(particles_values)
+            self.global_count = int(global_particles)
+
+        # 2) Throttling grafico
+        if now - self._last_draw_time < self._min_draw_interval:
+            return
+
+        self._last_draw_time = now
+
+        # 3) Aggiorno history e grafici
+        for ch in range(min(DUST_CHANNELS, len(adc_values))):
+            adc = self.channel_values[ch]
+            particles = self.channel_particles[ch]
+
+            self.channel_history[ch].append(adc)
+            self.advanced_tab.update_channel(ch, adc, particles)
+
+        # grafico e label globali (tab Global)
+        self.visual_tab.update_global(self.global_count)
+
+    # ---------- REFRESH RATE ----------
+    def set_refresh_interval(self, interval_seconds: float):
+        try:
+            value = float(interval_seconds)
+        except (TypeError, ValueError):
+            return
+        if value <= 0: return
+        self._min_draw_interval = value
+
+    # ---------- TEMA / ASPETTO ----------
+    def on_theme_changed(self):
+        try:
+            self.visual_tab.global_graph.redraw()
+        except Exception: pass
+        try:
+            for preview in self.advanced_tab.channel_previews:
+                preview.graph.redraw()
+        except Exception: pass
+        try:
+            for win in self.advanced_tab.channel_windows.values():
+                try:
+                    if win.winfo_exists(): win.graph.redraw()
+                except Exception: pass
+        except Exception: pass
+
+    # ---------- CHIUSURA ----------
+    def on_close(self):
+        if self.is_logging and self.log_file:
+            self.log_file.close()
+
+        if self.serial and self.serial.is_open:
+            try: self.serial.close()
+            except Exception: pass
+
+        if self.ble_client is not None:
+            fut = asyncio.run_coroutine_threadsafe(self._bt_disconnect_async(), self.ble_loop)
+            try: fut.result(timeout=1.0)
+            except Exception: pass
+
+        if self.ble_loop.is_running():
+            self.ble_loop.call_soon_threadsafe(self.ble_loop.stop)
+        self.destroy()
