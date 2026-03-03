@@ -428,7 +428,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
         HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET);
 
         // 3. Avvia la lettura DMA
-        // Se fallisce (es. SPI occupata), riporta CS alto per reset
+        // Se fallisce riporta CS alto per reset
         if (HAL_SPI_TransmitReceive_DMA(&hspi3, (uint8_t*)Tx_Command_Buffer, (uint8_t*)Rx_Data_Buffer, transfer_length) != HAL_OK)
         {
             HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);
