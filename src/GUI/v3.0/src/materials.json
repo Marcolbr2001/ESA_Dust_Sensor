@@ -1,0 +1,28 @@
+{
+    "Teflon": {
+        "description": "Standard PTFE sample",
+        "dust_thresh_offset": 10
+    },
+    "Lunar Simulant": {
+        "description": "JSC-1A Lunar Regolith Simulant",
+        "dust_thresh_offset": 50,
+        "calib_a": 0.264,
+        "calib_b": 0.553
+    },
+    "Martian Simulant": {
+        "description": "JSC-Mars-1A",
+        "dust_thresh_offset": 45
+    },
+    "Quartz Sand": {
+        "description": "Fine grain quartz",
+        "dust_thresh_offset": 30
+    },
+        "Debug Material 0": {
+        "description": "Fine grain quartz",
+        "dust_thresh_offset": 0
+    },
+        "Debug Material 100.000": {
+        "description": "Fine grain quartz",
+        "dust_thresh_offset": 100000
+    }
+}
