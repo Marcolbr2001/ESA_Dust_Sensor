@@ -144,6 +144,7 @@ typedef struct
 
 /* USER CODE BEGIN PD */
 #define ADV_TIMEOUT_MS                 (60 * 1000)
+#define MY_DEVICE_NAME_ADDR  ((uint8_t*)0x080FF000)#define MY_DEVICE_NAME_ADDR  ((uint8_t*)0x080FF000)
 /* Device Info Characteristic UUID */
 #define COPY_UUID_128(uuid_struct, uuid_15, uuid_14, uuid_13, uuid_12, uuid_11, uuid_10, uuid_9, uuid_8, uuid_7, uuid_6, uuid_5, uuid_4, uuid_3, uuid_2, uuid_1, uuid_0) \
 do {\

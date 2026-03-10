@@ -53,6 +53,14 @@ uint16_t Rx_Data_Buffer[1];
 uint16_t transfer_length = 1; // 1 parola (unità di 16 bit)
 
 
+// Variabili globali per la frequenza PWM in modalità Automatica
+uint32_t g_pwm_freq_khz = 4; // Default 4 kHz
+uint32_t g_pwm_arr = 249;    // ARR default
+uint32_t g_pwm_pulse = 125;  // Duty cycle al 50% default
+
+// Variabile per il canale manuale (0-31 per il firmware, ma l'utente invia 1-32)
+uint8_t g_manual_channel = 0;
+
 volatile uint8_t g_ble_dust_stream_enabled = 0;
 volatile uint8_t g_usb_dust_stream_enabled = 0;
 
@@ -283,19 +291,19 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 
 			if(len >= 2 && data_received[1] == 'A')
 			{
-				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET); //Automatic channel selection and iteration
+				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET); //Automatic channel selection and iteration
 				Config_PA7_As_PWM();
 				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_SET); // Reset canale corrente a 0
 				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_RESET); // Il segnale reset torna basso
 				next_ch = 0u;
-				dcc_sel_ck = 1; // flag automatic
+				dcc_sel_ck = 0; // flag automatic
 			}
 			else
 			{
-				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET); //Manual Channel selection and iteration
+				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET); //Manual Channel selection and iteration
 				Config_PA7_As_GPIO();
 				next_ch = 0u;
-				dcc_sel_ck = 0;	// flag manual
+				dcc_sel_ck = 1;	// flag manual
 			}
 			break;
 
@@ -328,6 +336,73 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 			}
 
 			break;
+
+			// ------ PWM Frequency Configuration (kHz) ------ //
+			case 'F':
+				if (len > 1)
+				{
+					char tmp[4];  // max 3 cifre + '\0'
+					uint16_t num_bytes = len - 1;
+
+					// Limito il numero di byte
+					if (num_bytes > (sizeof(tmp) - 1))
+					{
+						num_bytes = sizeof(tmp) - 1;
+					}
+
+					memcpy(tmp, &data_received[1], num_bytes);
+					tmp[num_bytes] = '\0';
+
+					int val_khz = atoi(tmp);
+
+					// Sicurezza: Limito la frequenza tra 1 kHz e 500 kHz
+					if (val_khz >= 1 && val_khz <= 500)
+					{
+						g_pwm_freq_khz = val_khz;
+						g_pwm_arr = (1000 / g_pwm_freq_khz) - 1;
+						g_pwm_pulse = (g_pwm_arr + 1) / 2; // Mantiene il duty cycle al 50%
+
+						// Se siamo già in modalità automatica, aggiorna i registri del timer al volo
+						if (dcc_sel_ck == 0)
+						{
+							__HAL_TIM_SET_AUTORELOAD(&htim2, g_pwm_arr);
+							__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, g_pwm_pulse);
+						}
+					}
+				}
+				break;
+
+
+				// ------ Manual Channel Selection ------ //
+				case 'N':
+					if (len > 1)
+					{
+						char tmp[4];
+						uint16_t num_bytes = len - 1;
+
+						if (num_bytes > (sizeof(tmp) - 1))
+						{
+							num_bytes = sizeof(tmp) - 1;
+						}
+
+						memcpy(tmp, &data_received[1], num_bytes);
+						tmp[num_bytes] = '\0';
+
+						int val = atoi(tmp);
+
+						// L'utente invia da 1 a 32. In C gli array sono da 0 a 31.
+						if (val >= 1 && val <= 32)
+						{
+							g_manual_channel = (uint8_t)(val - 1);
+
+							// Se siamo già in modalità manuale, cambiamo subito fisicamente il canale
+							if (dcc_sel_ck == 1)
+							{
+								CHANNEL_SET(g_manual_channel);
+							}
+						}
+					}
+					break;
 
 		// ------ Reset ALL ------ //
 		case '0':
@@ -441,9 +516,10 @@ void HAL_LPTIM_AutoReloadMatchCallback(LPTIM_HandleTypeDef *hlptim)
 	//HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_1); DEBUG
 
     // Se la lettura canali è manuale -> Selecting prossimo canale SW e HW --> POI LI METTO INSIEME
-	if(dcc_sel_ck == 0)
+	if(dcc_sel_ck == 1)
 	{
-		CHANNEL_SET(next_ch);
+		//CHANNEL_SET(next_ch);
+		CHANNEL_SET(g_manual_channel);
 	}
 	DUST_SetCurrentChannel(next_ch);
 	GET_ADC_VALUES_continous();
@@ -821,10 +897,10 @@ void HAL_COMP_TriggerCallback(COMP_HandleTypeDef *hcomp)
 			// === RISING EDGE DETECTED ===
 			// Il segnale è salito SOPRA la soglia
 			// Accendi LED Rosso
-			LED_BLINKING(TIM_CHANNEL_2, pwm_buf); //red --> questo è collegato al led della EBoard
+			//LED_BLINKING(TIM_CHANNEL_2, pwm_buf); //red --> questo è collegato al led della EBoard
 
 			//Spegniamo subito il sensore
-			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET); //Con questa linea disattiviamo la power rail del sensore
+			//HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET); //Con questa linea disattiviamo la power rail del sensore
 
 		}
 		else
@@ -940,12 +1016,14 @@ void Config_PA7_As_PWM(void)
     __HAL_TIM_SET_PRESCALER(&htim2, 95);
 
     // Periodo 249 -> 250 tick totali = 250us
-    __HAL_TIM_SET_AUTORELOAD(&htim2, 249);
+    //__HAL_TIM_SET_AUTORELOAD(&htim2, 249);
+    __HAL_TIM_SET_AUTORELOAD(&htim2, g_pwm_arr);
 
     // 4. Configura il Canale PWM (Duty 50%)
     TIM_OC_InitTypeDef sConfigOC = {0};
     sConfigOC.OCMode = TIM_OCMODE_PWM1;
-    sConfigOC.Pulse = 125; // 125us Alto, 125us Basso
+    //sConfigOC.Pulse = 125; // 125us Alto, 125us Basso
+    sConfigOC.Pulse = g_pwm_pulse;
     sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
     sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
 

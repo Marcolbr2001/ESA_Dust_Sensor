@@ -88,6 +88,7 @@ class SettingsTab(ctk.CTkFrame):
         hw_frame.grid_columnconfigure(0, weight=1)
         hw_frame.grid_columnconfigure(1, weight=1)
         hw_frame.grid_columnconfigure(2, weight=1)
+        hw_frame.grid_columnconfigure(3, weight=1)
 
         # --- Card Dust Clock ---
         clock_card = self._create_card(hw_frame)
@@ -108,16 +109,55 @@ class SettingsTab(ctk.CTkFrame):
         ctk.CTkLabel(read_card, text="Read Mode", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=(10, 5), padx=15, anchor="center")
         
         mode_inner = ctk.CTkFrame(read_card, fg_color="transparent")
-        mode_inner.pack(pady=5)
+        mode_inner.pack(pady=2)
         ctk.CTkLabel(mode_inner, text="Manual").pack(side="left", padx=5)
         self.read_auto_var = ctk.BooleanVar(value=False)
         ctk.CTkSwitch(mode_inner, text="Auto", variable=self.read_auto_var, command=self._on_read_mode_changed).pack(side="left", padx=5)
         
-        ctk.CTkLabel(read_card, text="Manual vs Cyclic readout.", font=self._desc_font, text_color="gray").pack(pady=(5, 10), padx=15)
+        # --- NUOVO: Selettore canale manuale (mostrato sotto lo switch) ---
+        self.manual_ch_frame = ctk.CTkFrame(read_card, fg_color="transparent")
+        self.manual_ch_frame.pack(pady=(2, 5))
+
+        ctk.CTkLabel(self.manual_ch_frame, text="CH:", font=self._desc_font).pack(side="left", padx=(0, 2))
+        self.manual_ch_value = ctk.IntVar(value=1)
+        self.manual_ch_entry = ctk.CTkEntry(self.manual_ch_frame, width=40, textvariable=self.manual_ch_value, justify="center")
+        self.manual_ch_entry.pack(side="left", padx=2)
+        self.manual_ch_entry.bind("<Return>", self._on_manual_ch_commit)
+
+        ch_btn_frame = ctk.CTkFrame(self.manual_ch_frame, fg_color="transparent")
+        ch_btn_frame.pack(side="left")
+        ctk.CTkButton(ch_btn_frame, text="▲", width=25, height=20, command=self._on_manual_ch_inc).pack(pady=1)
+        ctk.CTkButton(ch_btn_frame, text="▼", width=25, height=20, command=self._on_manual_ch_dec).pack(pady=1)
+        
+        # Inizializza lo stato dell'UI (abilitato/disabilitato)
+        self._update_manual_ch_ui()
+
+        # --- NUOVA CARD: PWM Frequency ---
+        pwm_card = self._create_card(hw_frame)
+        pwm_card.grid(row=0, column=2, sticky="nsew", padx=5)
+        
+        ctk.CTkLabel(pwm_card, text="PWM Freq", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=(10, 5), padx=15)
+        
+        pwm_inner = ctk.CTkFrame(pwm_card, fg_color="transparent")
+        pwm_inner.pack(pady=5)
+        
+        self.pwm_value = ctk.IntVar(value=4)
+        self.pwm_entry = ctk.CTkEntry(pwm_inner, width=50, textvariable=self.pwm_value, justify="center")
+        self.pwm_entry.pack(side="left", padx=5)
+        self.pwm_entry.bind("<Return>", self._on_pwm_entry_commit)
+        
+        ctk.CTkLabel(pwm_inner, text="kHz", font=self._desc_font).pack(side="left", padx=2)
+        
+        pwm_btn_frame = ctk.CTkFrame(pwm_inner, fg_color="transparent")
+        pwm_btn_frame.pack(side="left")
+        ctk.CTkButton(pwm_btn_frame, text="▲", width=25, height=20, command=self._on_pwm_inc).pack(pady=1)
+        ctk.CTkButton(pwm_btn_frame, text="▼", width=25, height=20, command=self._on_pwm_dec).pack(pady=1)
+        
+        ctk.CTkLabel(pwm_card, text="Auto mode toggle rate.", font=self._desc_font, text_color="gray").pack(pady=(5, 10), padx=15)
 
         # --- Card Averaging ---
         avg_card = self._create_card(hw_frame)
-        avg_card.grid(row=0, column=2, sticky="nsew", padx=(5, 0))
+        avg_card.grid(row=0, column=3, sticky="nsew", padx=(5, 0))
         
         ctk.CTkLabel(avg_card, text="Avg Window", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=(10, 5), padx=15)
         
@@ -251,8 +291,48 @@ class SettingsTab(ctk.CTkFrame):
         elif val == "400": self._send_bt(b"K40")
 
     def _on_read_mode_changed(self):
-        if self.read_auto_var.get(): self._send_bt(b"MA")
-        else: self._send_bt(b"MM")
+        if self.read_auto_var.get(): 
+            self._send_bt(b"MA")
+        else: 
+            self._send_bt(b"MM")
+            self._send_manual_ch_command() # Invia il canale non appena entri in manuale
+            
+        self._update_manual_ch_ui()
+
+    def _update_manual_ch_ui(self):
+        # Disabilita il campo testo se siamo in "Auto" (read_auto_var == True nel tuo caso)
+        state = "disabled" if self.read_auto_var.get() else "normal"
+        self.manual_ch_entry.configure(state=state)
+
+    # ====================================================================== #
+    # LOGICA CANALE MANUALE (1 - 32)
+    # ====================================================================== #
+    
+    def _on_manual_ch_inc(self):
+        if not self.read_auto_var.get(): # Permesso solo in Manual
+            self.manual_ch_value.set(self._clamp_ch(self.manual_ch_value.get() + 1))
+            self._send_manual_ch_command()
+
+    def _on_manual_ch_dec(self):
+        if not self.read_auto_var.get():
+            self.manual_ch_value.set(self._clamp_ch(self.manual_ch_value.get() - 1))
+            self._send_manual_ch_command()
+
+    def _on_manual_ch_commit(self, event=None):
+        if not self.read_auto_var.get():
+            try:
+                val = int(self.manual_ch_entry.get())
+                self.manual_ch_value.set(self._clamp_ch(val))
+                self._send_manual_ch_command()
+            except ValueError:
+                pass
+
+    def _clamp_ch(self, value):
+        return max(1, min(32, value))
+
+    def _send_manual_ch_command(self):
+        # Invia il comando 'N' + numero canale (es: N5)
+        self._send_bt(f"N{self.manual_ch_value.get()}".encode("ascii"))
 
     def _on_v_inc(self):
         self.v_value.set(self._clamp_v(self.v_value.get() + 1))
@@ -275,6 +355,33 @@ class SettingsTab(ctk.CTkFrame):
 
     def _send_v_command(self):
         self._send_bt(f"V{self.v_value.get()}".encode("ascii"))
+
+# ====================================================================== #
+    # LOGICA PWM FREQUENCY
+    # ====================================================================== #
+    
+    def _on_pwm_inc(self):
+        self.pwm_value.set(self._clamp_pwm(self.pwm_value.get() + 1))
+        self._send_pwm_command()
+
+    def _on_pwm_dec(self):
+        self.pwm_value.set(self._clamp_pwm(self.pwm_value.get() - 1))
+        self._send_pwm_command()
+
+    def _on_pwm_entry_commit(self, event=None):
+        try:
+            val = int(self.pwm_entry.get())
+            self.pwm_value.set(self._clamp_pwm(val))
+            self._send_pwm_command()
+        except ValueError:
+            pass
+
+    def _clamp_pwm(self, value):
+        return max(1, min(500, value)) # Clamp tra 1 kHz e 500 kHz
+
+    def _send_pwm_command(self):
+        # Invia la stringa "F<valore>"
+        self._send_bt(f"F{self.pwm_value.get()}".encode("ascii"))
 
     # ====================================================================== #
     # SYSTEM
