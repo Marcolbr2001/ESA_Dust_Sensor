@@ -416,7 +416,7 @@ int main(void)
   DUST_Init();
   DUST_SetCallback(MyDustEventHandler);
 
-  LED_BLINKING(TIM_CHANNEL_1, pwm_buf_main); // --> Green turns on, board ON
+  LED_BLINKING(TIM_CHANNEL_1, pwm_buf_main); // --> Red turns on, board ON (green is tim_1)
 
 
     HAL_NVIC_DisableIRQ(COMP_IRQn);

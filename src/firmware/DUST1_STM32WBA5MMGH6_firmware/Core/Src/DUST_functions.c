@@ -200,6 +200,25 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 				{
 					g_ble_dust_stream_enabled = 1;
 					g_usb_dust_stream_enabled = 0;
+
+					//If we are restarting an automatic iteration, reset the channel read to begin from channel 1
+					if(dcc_sel_ck == 0)
+					{
+						HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET); //Automatic channel selection and iteration
+						Config_PA7_As_PWM();
+						HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_SET); // Reset canale corrente a 0
+						HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_RESET); // Il segnale reset torna basso
+						next_ch = 0u;
+					}
+					else
+					{
+						HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_SET); // Reset conattore canale, ma 1 significa anche spegnimento del clock automatico del counter
+						HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET); //Manual Channel selection and iteration
+						Config_PA7_As_GPIO();
+						next_ch = 0u;
+						g_manual_channel = 0;
+					}
+
 				}
 				else //use "Cu" for USB
 				{
@@ -216,6 +235,24 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 
 				g_ble_dust_stream_enabled = 1;
 				g_usb_dust_stream_enabled = 0;
+
+				//If we are restarting an automatic iteration, reset the channel read to begin from channel 1
+				if(dcc_sel_ck == 0)
+				{
+					HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET); //Automatic channel selection and iteration
+					Config_PA7_As_PWM();
+					HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_SET); // Reset canale corrente a 0
+					HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_RESET); // Il segnale reset torna basso
+					next_ch = 0u;
+				}
+				else
+				{
+					HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_SET); // Reset conattore canale, ma 1 significa anche spegnimento del clock automatico del counter
+					HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET); //Manual Channel selection and iteration
+					Config_PA7_As_GPIO();
+					next_ch = 0u;
+					g_manual_channel = 0;
+				}
 
 			break;
 
@@ -300,9 +337,11 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 			}
 			else
 			{
+				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_SET); // Reset conattore canale, ma 1 significa anche spegnimento del clock automatico del counter
 				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET); //Manual Channel selection and iteration
 				Config_PA7_As_GPIO();
 				next_ch = 0u;
+				g_manual_channel = 0;
 				dcc_sel_ck = 1;	// flag manual
 			}
 			break;
@@ -390,7 +429,7 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 
 						int val = atoi(tmp);
 
-						// L'utente invia da 1 a 32. In C gli array sono da 0 a 31.
+						// L'utente invia da 1 a 32, nel firmware sono da 0 a 31.
 						if (val >= 1 && val <= 32)
 						{
 							g_manual_channel = (uint8_t)(val - 1);
@@ -489,7 +528,7 @@ void GET_ADC_VALUES_continous()
 }
 
 
-// Puoi mettere questa funzione in main.c o DUST_functions.c
+// Questa funzione serve ad aspettare gli max 8800ns richiesti per la conversione dell'ADC
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
     // Controlla che sia TIM1 a chiamare
@@ -520,8 +559,13 @@ void HAL_LPTIM_AutoReloadMatchCallback(LPTIM_HandleTypeDef *hlptim)
 	{
 		//CHANNEL_SET(next_ch);
 		CHANNEL_SET(g_manual_channel);
+		DUST_SetCurrentChannel(g_manual_channel);
 	}
-	DUST_SetCurrentChannel(next_ch);
+	else
+	{
+		DUST_SetCurrentChannel(next_ch);
+
+	}
 	GET_ADC_VALUES_continous();
 
 }
@@ -784,7 +828,7 @@ void DUST_Process(uint8_t channel, uint16_t raw_sample, uint32_t timestamp_ms)
 
                     // Impostiamo un tempo morto (Dead Time) in cui inseguiamo il segnale
                     // 10 campioni dovrebbero bastare per far finire la transizione del gradino
-                    s->refr_cnt = 10;
+                    s->refr_cnt = 16;
 
                     // Salva dati evento
                     if (s->event_len < DUST_EVENT_SAMPLES) s->event_buf[s->event_len++] = filtered;
