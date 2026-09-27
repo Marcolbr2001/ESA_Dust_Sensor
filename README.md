@@ -32,7 +32,7 @@
 
 <div align="center">
   <a href="https://github.com/Marcolbr2001/Dust_Sensor">
-    <img width="333" height="314" alt="Board_Dust" src="https://github.com/user-attachments/assets/20185fb0-e5e1-49c9-b949-508d28273066" alt="Logo" heigth="400" width="400"/>
+    <img width="496" height="468" alt="Dust_Board" src="https://github.com/user-attachments/assets/7ff83d4a-3b79-4df1-b90b-42a662042927" />
     <!--<img src="https://github.com/user-attachments/assets/70fec228-3cf5-4fef-bc37-bc2c930fc334" alt="Logo" heigth="400" width="400">-->
   </a>
 </div>
