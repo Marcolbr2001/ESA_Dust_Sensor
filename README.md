@@ -204,9 +204,15 @@ Once you press the button, you will begin see the data flow into the graphs. If 
 
 <div align="center">
   <a href="https://github.com/Marcolbr2001/Dust_Sensor">
-<img width="550" height="450" alt="screen" src="https://github.com/user-attachments/assets/04de5f7d-fb53-4b5f-9991-d80c4b9505fb" />
+<img width="3003" height="2400" alt="GUI_frame" src="https://github.com/user-attachments/assets/3f6a668a-fc6c-400a-b2fe-cb72e8ca4868" />
   </a>
 </div>
+
+<!--<div align="center">
+  <a href="https://github.com/Marcolbr2001/Dust_Sensor">
+<img width="550" height="450" alt="screen" src="https://github.com/user-attachments/assets/04de5f7d-fb53-4b5f-9991-d80c4b9505fb" />
+  </a>
+</div>-->
 <!--<p align="right">(<a href="#readme-top">back to top</a>)</p>-->
 <br>
 
