@@ -1,0 +1,39 @@
+{
+    "Teflon": {
+        "description": "Polytetraflourethylene (PTFE)",
+        "particle_size_range": "2um",
+        "median_particle_size": "2um",
+        "text": "The plastic polytetrafluoroethylene (PTFE), also known under the trade name Teflon, is a semi-crystalline polymer that is extremely nonpolar and, therefore, anti-adhesive and barely wettable.",
+        "picture": "ptfe.jpg",
+        "dust_thresh_offset": 30
+    },
+    "LHS-1D": {
+        "description": "Lunar Highlands Dust Simulant",
+        "particle_size_range": "1um - 30um",
+        "median_particle_size": "7um",
+        "text": "LHS-1D is mineralogically derived from lunar highlands compositions, it consists exclusively of particles finer than 30 um, with a mean particle size of approximately 7 um, , closely matching the size range responsible for adhesion, abrasion, electrostatic behavior, and biological interaction effects observed in lunar dust studies.",
+        "picture": "lhs1d.jpg",
+        "dust_thresh_offset": 170,
+        "calib_a": 0.264,
+        "calib_b": 0.553
+    },
+    "MGS-1": {
+        "description": "Mars Global Simulant",
+        "particle_size_range": "0.04um - 1000um",
+        "median_particle_size": "70.51 um",
+        "text": "MGS-1 represents general Martian regolith, designed to reflect the average surface material encountered across multiple Martian terrains rather than a single localized deposit. The simulant consists of particles <1 mm in size, capturing the fine-grained nature of Martian soil while maintaining realistic mechanical and handling behavior under terrestrial laboratory conditions.",
+        "picture": "mgs1.jpg",
+        "dust_thresh_offset": 170,
+        "calib_a": 0.264,
+        "calib_b": 0.553
+    },
+    "Generic Polymer Bids (8 um)": {
+        "particle_size_range": "8um",
+        "median_particle_size": "8um",
+        "text": "It consists of polymer beads with a uniform size of 8 micrometers, making it ideal for controlled experiments where particle size consistency is crucial. These beads are commonly used in research to simulate dust particles in various applications, including studies on adhesion, abrasion, and electrostatic behavior.",
+        "picture": "polymer.jpg",
+        "dust_thresh_offset": 170,
+        "calib_a": 0.264,
+        "calib_b": 0.553
+    }
+}
