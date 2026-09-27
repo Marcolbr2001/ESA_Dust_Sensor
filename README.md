@@ -157,7 +157,7 @@ A page like that will be showed to you.
 
 <div align="center">
   <a href="https://github.com/Marcolbr2001/Dust_Sensor">
-<img width="550" height="450" alt="dustGUI_first_page" src="https://github.com/user-attachments/assets/7469d1cf-9a90-492e-b1e8-32f5d7a810ce" />
+<img width="550" height="410" alt="dustGUI_first_page" src="https://github.com/user-attachments/assets/7469d1cf-9a90-492e-b1e8-32f5d7a810ce" />
   </a>
 </div>
 <!--<p align="right">(<a href="#readme-top">back to top</a>)</p>-->
