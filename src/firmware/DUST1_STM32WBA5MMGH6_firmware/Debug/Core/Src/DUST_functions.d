@@ -105,7 +105,7 @@ Core/Src/DUST_functions.o: ../Core/Src/DUST_functions.c \
  ../Middlewares/ST/STM32_WPAN/ble/svc/Inc/svc_ctl.h \
  ../Core/Inc/stm32_rtos.h ../Utilities/sequencer/stm32_seq.h \
  ../Utilities/tim_serv/stm32_timer.h ../Core/Inc/DUST_functions.h \
- ../Core/Inc/main.h ../Core/Inc/stm32_rtos.h
+ ../Core/Inc/main.h ../Core/Inc/stm32_rtos.h ../Core/Inc/device_config.h
 ../Core/Inc/main.h:
 ../Drivers/STM32WBAxx_HAL_Driver/Inc/stm32wbaxx_hal.h:
 ../Core/Inc/stm32wbaxx_hal_conf.h:
@@ -223,3 +223,4 @@ Core/Src/DUST_functions.o: ../Core/Src/DUST_functions.c \
 ../Core/Inc/DUST_functions.h:
 ../Core/Inc/main.h:
 ../Core/Inc/stm32_rtos.h:
+../Core/Inc/device_config.h:

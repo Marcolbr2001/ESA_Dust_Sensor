@@ -1,0 +1,6 @@
+customtkinter>=5.2
+pillow
+bleak>=0.22
+pyserial
+numpy
+matplotlib

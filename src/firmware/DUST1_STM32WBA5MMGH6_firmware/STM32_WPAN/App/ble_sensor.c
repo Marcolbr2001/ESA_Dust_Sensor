@@ -70,8 +70,8 @@ typedef struct{
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-static const uint16_t SizeMydata = 100;
-static const uint16_t SizeRecdata = 3;
+static const uint16_t SizeMydata = 164;
+static const uint16_t SizeRecdata = 20;
 
 static BLE_SENSOR_Context_t BLE_SENSOR_Context;
 
@@ -428,7 +428,7 @@ void BLE_SENSOR_Init(void)
                           ATTR_PERMISSION_NONE,
                           GATT_NOTIFY_ATTRIBUTE_WRITE,
                           0x10,
-                          CHAR_VALUE_LEN_CONSTANT,
+                          CHAR_VALUE_LEN_VARIABLE,
                           &(BLE_SENSOR_Context.RecdataCharHdle));
   if (ret != BLE_STATUS_SUCCESS)
   {

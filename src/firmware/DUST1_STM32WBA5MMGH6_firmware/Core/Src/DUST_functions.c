@@ -12,6 +12,7 @@
 #include "string.h"
 #include "stm32_timer.h"
 #include "DUST_functions.h"
+#include "device_config.h"
 
 #include "stm32wbaxx_hal.h"
 #include "stm32wbaxx_hal_lptim.h"
@@ -29,8 +30,15 @@
 
 #define DUST_WARMUP_SAMPLES  150u  // Ignora i primi 150 campioni (circa 1-3 secondi a seconda del clock)
 
+//#define DUST_THRESH          170u
+//#define DUST_WINDOW          100u // Era 50, raddoppiato perché nel firmware andiamo al doppio della velcoità
+//#define DUST_TRIG_STEP       6u   // Era 3, raddoppiato perché nel firmware andiamo al doppio della velcoità
+//#define DUST_REC_RATIO_PCT   18u  // 0.18 (18%)
+
+#define DUST_MAX_TRIG_STEP 30u
+
 uint16_t adc_val = 0;
-uint8_t dust_mavg_window = 4u;   // moving average over N samples (to be tuned)
+uint8_t dust_mavg_window = 10u;   // moving average over N samples (to be tuned)
 uint16_t dust_thresh_offset = 50u;
 // Buffer di prova (array di uint8_t)
 uint8_t test_message[] = "UART DMA TEST: Linea Operativa\r\n";
@@ -71,6 +79,32 @@ extern uint8_t g_ram_buffer[];
 extern uint32_t g_ram_head;
 
 volatile uint8_t dcc_sel_ck = 0;
+volatile uint8_t g_processing_lock = 0;
+
+// --- PARAMETRI DSP DINAMICI (Modificabili via UART) ---
+uint16_t g_dust_thresh = 170u;
+uint16_t g_dust_window = 100u;       // Corrisponde a 50 in GUI
+uint8_t  g_dust_trig_step = 6u;      // Corrisponde a 3 in GUI
+uint8_t  g_dust_rec_ratio_pct = 18u; // Corrisponde a 0.18 in GUI
+
+
+// --- VARIABILI PONTE PER IL TASK ---
+volatile uint16_t pending_spi_val = 0;
+volatile uint8_t  pending_ch_idx = 0;
+
+// Variabile globale per tenere traccia di quale canale stiamo leggendo
+volatile uint8_t adc_read_step = 0;
+
+// Array per il DMA dell'ADC4 (GPDMA1 canale 5 a half-word con destinazione incrementata):
+// [0] = Rank 1 = ADC4_IN8 = PA1 = OUT_N, [1] = Rank 2 = ADC4_IN4 = PA5 = OUT_P
+volatile uint16_t adc_dma_buf[2];
+
+// Watchdog della catena LPTIM -> TIM1 -> SPI -> ADC -> task: se una callback si perde
+// il semaforo resterebbe chiuso per sempre e lo stream si fermerebbe senza errori
+#define DUST_LOCK_TIMEOUT_TICKS  133u  // periodi LPTIM1 (~100 ms a 1.33 kHz)
+static uint8_t g_lock_wait_ticks = 0;
+volatile uint32_t g_lock_recovery_count = 0; // da guardare nel debugger: se cresce, una callback si perde
+volatile uint32_t g_adc_error_count = 0;     // overrun / errori DMA dell'ADC4
 
 // -------------------- strutture dati per canali ------ //
 typedef enum
@@ -108,6 +142,17 @@ typedef struct
 
     uint16_t warmup_cnt; // Contatore per il riscaldamento iniziale
 
+    // --- DSP Variables --- //
+    uint16_t history[DUST_MAX_TRIG_STEP]; // Salva i vecchi campioni per il trigger
+	uint8_t  hist_idx;                // Indice del buffer circolare
+
+	uint16_t initial_baseline;
+	uint16_t peak_val;
+	int8_t   step_dir;
+
+	uint8_t last_adc_pos; // Valore letto da PA5 = OUT_P (ADC4_IN4, Rank 2)
+	uint8_t last_adc_neg; // Valore letto da PA1 = OUT_N (ADC4_IN8, Rank 1)
+
 } DustChannelState_t;
 
 static DustChannelState_t   g_ch[DUST_CHANNELS];
@@ -117,44 +162,44 @@ static DustEventCallback_t  g_dust_cb = NULL;   // callback utente
 static uint8_t              next_ch = 0u;
 static uint8_t  			sending_round   = 0u;
 
-static uint8_t uart_frame[2 + DUST_CHANNELS * 3 + 2]; // header + 32*(sync+ch+count+2B) + "\r\n"
+static uint8_t uart_frame[2 + DUST_CHANNELS * 5 + 2]; // header + 32*(sync+ch+count+2B) + "\r\n"
 
 
 // ---------------------------------------------- //
 
 static const uint32_t bsrrA[32] = {
-    0x00DA0000, // i=0  (00000) -> Reset PA1, PA3, PA4, PA6, PA7
-    0x005A0080, // i=1  (00001) -> Set PA7
-    0x009A0040, // i=2  (00010) -> Set PA6
-    0x001A00C0, // i=3  (00011) -> Set PA6, PA7
-    0x00CA0010, // i=4  (00100) -> Set PA4
-    0x004A0090, // i=5  (00101) -> Set PA4, PA7
-    0x008A0050, // i=6  (00110) -> Set PA4, PA6
-    0x000A00D0, // i=7  (00111) -> Set PA4, PA6, PA7
-    0x00D20008, // i=8  (01000) -> Set PA3
-    0x00520088, // i=9  (01001) -> Set PA3, PA7
-    0x00920048, // i=10 (01010) -> Set PA3, PA6
-    0x001200C8, // i=11 (01011) -> Set PA3, PA6, PA7
-    0x00C20018, // i=12 (01100) -> Set PA3, PA4
-    0x00420098, // i=13 (01101) -> Set PA3, PA4, PA7
-    0x00820058, // i=14 (01110) -> Set PA3, PA4, PA6
-    0x000200D8, // i=15 (01111) -> Set PA3, PA4, PA6, PA7
-    0x00D80002, // i=16 (10000) -> Set PA1
-    0x00580082, // i=17 (10001) -> Set PA1, PA7
-    0x00980042, // i=18 (10010) -> Set PA1, PA6
-    0x001800C2, // i=19 (10011) -> Set PA1, PA6, PA7
-    0x00C80012, // i=20 (10100) -> Set PA1, PA4
-    0x00480092, // i=21 (10101) -> Set PA1, PA4, PA7
-    0x00880052, // i=22 (10110) -> Set PA1, PA4, PA6
-    0x000800D2, // i=23 (10111) -> Set PA1, PA4, PA6, PA7
-    0x00D0000A, // i=24 (11000) -> Set PA1, PA3
-    0x0050008A, // i=25 (11001) -> Set PA1, PA3, PA7
-    0x0090004A, // i=26 (11010) -> Set PA1, PA3, PA6
-    0x001000CA, // i=27 (11011) -> Set PA1, PA3, PA6, PA7
-    0x00C0001A, // i=28 (11100) -> Set PA1, PA3, PA4
-    0x0040009A, // i=29 (11101) -> Set PA1, PA3, PA4, PA7
-    0x0080005A, // i=30 (11110) -> Set PA1, PA3, PA4, PA6
-    0x000000DA  // i=31 (11111) -> Set PA1, PA3, PA4, PA6, PA7
+    0x10D80000, // i=0  (00000) -> Reset PA12, PA7, PA6, PA4, PA3
+    0x10580080, // i=1  (00001) -> Set PA7
+    0x10980040, // i=2  (00010) -> Set PA6
+    0x101800C0, // i=3  (00011) -> Set PA6, PA7
+    0x10C80010, // i=4  (00100) -> Set PA4
+    0x10480090, // i=5  (00101) -> Set PA4, PA7
+    0x10880050, // i=6  (00110) -> Set PA4, PA6
+    0x100800D0, // i=7  (00111) -> Set PA4, PA6, PA7
+    0x10D00008, // i=8  (01000) -> Set PA3
+    0x10500088, // i=9  (01001) -> Set PA3, PA7
+    0x10900048, // i=10 (01010) -> Set PA3, PA6
+    0x101000C8, // i=11 (01011) -> Set PA3, PA6, PA7
+    0x10C00018, // i=12 (01100) -> Set PA3, PA4
+    0x10400098, // i=13 (01101) -> Set PA3, PA4, PA7
+    0x10800058, // i=14 (01110) -> Set PA3, PA4, PA6
+    0x100000D8, // i=15 (01111) -> Set PA3, PA4, PA6, PA7
+    0x00D81000, // i=16 (10000) -> Set PA12
+    0x00581080, // i=17 (10001) -> Set PA12, PA7
+    0x00981040, // i=18 (10010) -> Set PA12, PA6
+    0x001810C0, // i=19 (10011) -> Set PA12, PA6, PA7
+    0x00C81010, // i=20 (10100) -> Set PA12, PA4
+    0x00481090, // i=21 (10101) -> Set PA12, PA4, PA7
+    0x00881050, // i=22 (10110) -> Set PA12, PA4, PA6
+    0x000810D0, // i=23 (10111) -> Set PA12, PA4, PA6, PA7
+    0x00D01008, // i=24 (11000) -> Set PA12, PA3
+    0x00501088, // i=25 (11001) -> Set PA12, PA3, PA7
+    0x00901048, // i=26 (11010) -> Set PA12, PA3, PA6
+    0x001010C8, // i=27 (11011) -> Set PA12, PA3, PA6, PA7
+    0x00C01018, // i=28 (11100) -> Set PA12, PA3, PA4
+    0x00401098, // i=29 (11101) -> Set PA12, PA3, PA4, PA7
+    0x00801058, // i=30 (11110) -> Set PA12, PA3, PA4, PA6
+    0x000010D8  // i=31 (11111) -> Set PA12, PA3, PA4, PA6, PA7
 };
 
 void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
@@ -173,6 +218,8 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 
 		// ------ comando debug colori led ------ //
 		case 'k':
+
+			if (len < 2) break; // comando incompleto: manca il colore
 
 			if (data_received[1] == 'g')
 			  LED_BLINKING(TIM_CHANNEL_1, pwm_buf); //green
@@ -204,7 +251,7 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 					//If we are restarting an automatic iteration, reset the channel read to begin from channel 1
 					if(dcc_sel_ck == 0)
 					{
-						HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET); //Automatic channel selection and iteration
+						HAL_GPIO_WritePin(DCC_Sel_GPIO_Port, DCC_Sel_Pin, GPIO_PIN_RESET); //Automatic channel selection and iteration
 						Config_PA7_As_PWM();
 						HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_SET); // Reset canale corrente a 0
 						HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_RESET); // Il segnale reset torna basso
@@ -213,7 +260,7 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 					else
 					{
 						HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_SET); // Reset conattore canale, ma 1 significa anche spegnimento del clock automatico del counter
-						HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET); //Manual Channel selection and iteration
+						HAL_GPIO_WritePin(DCC_Sel_GPIO_Port, DCC_Sel_Pin, GPIO_PIN_SET); //Manual Channel selection and iteration
 						Config_PA7_As_GPIO();
 						next_ch = 0u;
 						g_manual_channel = 0;
@@ -239,7 +286,7 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 				//If we are restarting an automatic iteration, reset the channel read to begin from channel 1
 				if(dcc_sel_ck == 0)
 				{
-					HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET); //Automatic channel selection and iteration
+					HAL_GPIO_WritePin(DCC_Sel_GPIO_Port, DCC_Sel_Pin, GPIO_PIN_RESET); //Automatic channel selection and iteration
 					Config_PA7_As_PWM();
 					HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_SET); // Reset canale corrente a 0
 					HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_RESET); // Il segnale reset torna basso
@@ -248,7 +295,7 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 				else
 				{
 					HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_SET); // Reset conattore canale, ma 1 significa anche spegnimento del clock automatico del counter
-					HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET); //Manual Channel selection and iteration
+					HAL_GPIO_WritePin(DCC_Sel_GPIO_Port, DCC_Sel_Pin, GPIO_PIN_SET); //Manual Channel selection and iteration
 					Config_PA7_As_GPIO();
 					next_ch = 0u;
 					g_manual_channel = 0;
@@ -266,7 +313,7 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 		        break;
 		    }
 
-		    char tmp[4];  // max 3 cifre + '\0'
+		    char tmp[5];  // max 3 cifre + '\0'
 		    uint16_t num_bytes = len - 1;
 
 		    // Limito il numero di byte copiati a sizeof(tmp)-1
@@ -328,7 +375,7 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 
 			if(len >= 2 && data_received[1] == 'A')
 			{
-				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET); //Automatic channel selection and iteration
+				HAL_GPIO_WritePin(DCC_Sel_GPIO_Port, DCC_Sel_Pin, GPIO_PIN_RESET); //Automatic channel selection and iteration
 				Config_PA7_As_PWM();
 				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_SET); // Reset canale corrente a 0
 				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_RESET); // Il segnale reset torna basso
@@ -338,7 +385,7 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 			else
 			{
 				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_SET); // Reset conattore canale, ma 1 significa anche spegnimento del clock automatico del counter
-				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET); //Manual Channel selection and iteration
+				HAL_GPIO_WritePin(DCC_Sel_GPIO_Port, DCC_Sel_Pin, GPIO_PIN_SET); //Manual Channel selection and iteration
 				Config_PA7_As_GPIO();
 				next_ch = 0u;
 				g_manual_channel = 0;
@@ -357,7 +404,7 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 		    else
 		    {
 
-			    char tmp[4];  // max 3 cifre + '\0'
+			    char tmp[5];  // max 3 cifre + '\0'
 			    uint16_t num_bytes = len - 1;
 
 			    // Limito il numero di byte copiati a sizeof(tmp)-1
@@ -372,6 +419,7 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 			    int val = atoi(tmp);
 
 			    dust_thresh_offset = val;
+			    g_dust_thresh = val;
 			}
 
 			break;
@@ -380,7 +428,7 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 			case 'F':
 				if (len > 1)
 				{
-					char tmp[4];  // max 3 cifre + '\0'
+					char tmp[5];  // max 3 cifre + '\0'
 					uint16_t num_bytes = len - 1;
 
 					// Limito il numero di byte
@@ -416,7 +464,7 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 				case 'N':
 					if (len > 1)
 					{
-						char tmp[4];
+						char tmp[5];
 						uint16_t num_bytes = len - 1;
 
 						if (num_bytes > (sizeof(tmp) - 1))
@@ -443,21 +491,82 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 					}
 					break;
 
-		// ------ Reset ALL ------ //
-		case '0':
-			HAL_LPTIM_Counter_Stop_IT(&hlptim1);
-			g_ble_dust_stream_enabled = 0;
-			g_usb_dust_stream_enabled = 0;
+			case 'R':
+					DUST_Init();
 
-			break;
+				break;
 
-		case 0xA5:
+			// ------ Nome del dispositivo: 'L' + nome (es. "LDUST_6"), salvato nel flash ------ //
+			// Resta dopo il caricamento di un nuovo firmware; l'advertising lo usa dalla
+			// prossima disconnessione. Risposta su RECDATA: "L+<nome>" oppure "L-<errore>"
+			case 'L':
+				DEVCFG_RequestRename(&data_received[1], (uint16_t)(len - 1u));
+				break;
 
-			break;
+			// ------ DSP: Threshold ------ //
+			case 'T':
+				if (len > 1) {
+					char tmp[5];
+					uint16_t num_bytes = (len - 1 > 4) ? 4 : len - 1;
+					memcpy(tmp, &data_received[1], num_bytes);
+					tmp[num_bytes] = '\0';
+					g_dust_thresh = (uint16_t)atoi(tmp);
+				}
+				break;
 
-		default:
+			// ------ DSP: Window ------ //
+			case 'W':
+				if (len > 1) {
+					char tmp[5];
+					uint16_t num_bytes = (len - 1 > 4) ? 4 : len - 1;
+					memcpy(tmp, &data_received[1], num_bytes);
+					tmp[num_bytes] = '\0';
+					g_dust_window = (uint16_t)atoi(tmp);
+				}
+				break;
 
-			break;
+			// ------ DSP: Trigger Step ------ //
+			case 'D': // Uso 'D' per Delay/Step
+				if (len > 1) {
+					char tmp[5];
+					uint16_t num_bytes = (len - 1 > 4) ? 4 : len - 1;
+					memcpy(tmp, &data_received[1], num_bytes);
+					tmp[num_bytes] = '\0';
+					int val = atoi(tmp);
+					if (val < 1) val = 1;
+					if (val > DUST_MAX_TRIG_STEP) val = DUST_MAX_TRIG_STEP;
+					g_dust_trig_step = (uint8_t)val;
+				}
+				break;
+
+			// ------ DSP: Recovery Ratio (%) ------ //
+			case 'E': // Uso 'E' per Efficiency/Recovery
+				if (len > 1) {
+					char tmp[5];
+					uint16_t num_bytes = (len - 1 > 4) ? 4 : len - 1;
+					memcpy(tmp, &data_received[1], num_bytes);
+					tmp[num_bytes] = '\0';
+					int val = atoi(tmp);
+					if (val < 0) val = 0;
+					if (val > 100) val = 100;
+					g_dust_rec_ratio_pct = (uint8_t)val;
+				}
+				break;
+			// ------ Reset ALL ------ //
+			case '0':
+				HAL_LPTIM_Counter_Stop_IT(&hlptim1);
+				g_ble_dust_stream_enabled = 0;
+				g_usb_dust_stream_enabled = 0;
+
+				break;
+
+			case 0xA5:
+
+				break;
+
+			default:
+
+				break;
 	}
 }
 
@@ -509,7 +618,11 @@ void GET_ADC_VALUES()
 void GET_ADC_VALUES_continous()
 {
 
-	if (hspi3.State != HAL_SPI_STATE_READY) return;
+	if (hspi3.State != HAL_SPI_STATE_READY)
+	{
+		g_processing_lock = 0; // SPI occupata: saltiamo il campione senza lasciare il semaforo chiuso
+		return;
+	}
 
 	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET); //Read dust chip values
 
@@ -546,13 +659,64 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
         if (HAL_SPI_TransmitReceive_DMA(&hspi3, (uint8_t*)Tx_Command_Buffer, (uint8_t*)Rx_Data_Buffer, transfer_length) != HAL_OK)
         {
             HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);
+            g_processing_lock = 0; // Lettura non partita: nessuna callback rilascerà il semaforo
         }
     }
+    //else if (htim->Instance == TIM16)
+    //{
+    	// 1. Facciamo partire la lettura dell'ADC interno
+//		ADC_ChannelConfTypeDef sConfig = {0};
+//		sConfig.Channel = ADC_CHANNEL_8; // Inizia da PA5
+//		sConfig.Rank = ADC_REGULAR_RANK_1;
+//		sConfig.SamplingTime = ADC_SAMPLETIME_814CYCLES_5;
+//		HAL_ADC_ConfigChannel(&hadc4, &sConfig);
+//
+//		HAL_ADC_Start_IT(&hadc4); // Parte in interrupt
+   // }
+}
+
+// Chiamata dall'ISR LPTIM quando il semaforo resta chiuso oltre DUST_LOCK_TIMEOUT_TICKS
+// (es. SPI annullato da un salvataggio su SD, DMA dell'ADC mai completato):
+// annulla quello che è rimasto in sospeso e riapre la catena di acquisizione
+static void DUST_Recover_Acquisition(void)
+{
+	g_lock_recovery_count++;
+
+	HAL_TIM_Base_Stop_IT(&htim1);
+
+	if (hspi3.State != HAL_SPI_STATE_READY)
+	{
+		HAL_SPI_Abort(&hspi3);
+	}
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);
+
+	// Con il clock ADC4 attivo le attese dentro HAL_ADC_Stop_DMA durano pochi us,
+	// anche qui dove HAL_GetTick() non avanza
+	__HAL_RCC_ADC4_CLK_ENABLE();
+	if ((HAL_ADC_GetState(&hadc4) & HAL_ADC_STATE_REG_BUSY) != 0U)
+	{
+		HAL_ADC_Stop_DMA(&hadc4);
+	}
+
+	g_processing_lock = 0;
 }
 
 void HAL_LPTIM_AutoReloadMatchCallback(LPTIM_HandleTypeDef *hlptim)
 {
 	//HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_1); DEBUG
+	// Se il Sequencer non ha ancora finito il giro precedente, saltiamo il turno!
+	    if (g_processing_lock == 1)
+	    {
+	        // ...a meno che il semaforo non sia chiuso da troppo tempo: callback persa
+	        if (++g_lock_wait_ticks < DUST_LOCK_TIMEOUT_TICKS)
+	        {
+	            return;
+	        }
+	        DUST_Recover_Acquisition();
+	    }
+
+	    g_lock_wait_ticks = 0;
+	    g_processing_lock = 1; // Chiudiamo il semaforo
 
     // Se la lettura canali è manuale -> Selecting prossimo canale SW e HW --> POI LI METTO INSIEME
 	if(dcc_sel_ck == 1)
@@ -570,58 +734,187 @@ void HAL_LPTIM_AutoReloadMatchCallback(LPTIM_HandleTypeDef *hlptim)
 
 }
 
+//void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
+//{
+//    if (hspi->Instance == SPI3)
+//    {
+//        pending_spi_val = Rx_Data_Buffer[0];
+//        pending_ch_idx  = g_current_channel;
+//        //UTIL_SEQ_SetTask(1U << 20, CFG_SEQ_PRIO_0);
+//        // Protezione: non avviare se il ciclo precedente non è finito
+//        if (adc_read_step != 0) return;
+//
+//        UTIL_SEQ_SetTask(1U << 19, CFG_SEQ_PRIO_0);
+//    }
+//}
+
 void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
 {
     if (hspi->Instance == SPI3)
     {
-        // 1. FINE LETTURA: Riporta il pin CONVST (CS) HIGH
-        // DOUT torna in 3-state e l'ADC in fase di Acquisizione.
-        //HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);
+        // 1. ALZA SUBITO IL CS PER L'SPI!
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);
 
-        uint16_t adc_val = Rx_Data_Buffer[0];
-        uint32_t now_ms  = HAL_GetTick();
+        pending_spi_val = Rx_Data_Buffer[0];
+        pending_ch_idx  = g_current_channel;
 
-        //adc_val = adc_val + 1; DEBUG
-        DUST_Process(g_current_channel, adc_val, now_ms);
+        // Protezione contro sovrapposizioni
+        if (g_processing_lock == 0) return; // Se siamo qui per sbaglio, esci
 
-        next_ch++;
-
-        if (next_ch >= DUST_CHANNELS)
+        // 2. Risveglio hardware dell'ADC: prima il clock (senza clock le scritture sui registri
+        //    ADC4 vengono ignorate e ADC_Enable() resterebbe bloccato in questa ISR, dove
+        //    HAL_GetTick() non avanza), poi il regolatore
+        __HAL_RCC_ADC4_CLK_ENABLE();
+        if ((hadc4.Instance->CR & ADC_CR_ADVREGEN) == 0)
         {
-            next_ch = 0u;
-            //dust_send_pending = 1;
-
-            sending_round++;
-
-
-            if (g_enable_sd_saving == 1)
-            {
-    			uint16_t RAM_frame_len = DUST_BuildFrame_RAM(uart_frame, sizeof(uart_frame));
-
-    			if(RAM_frame_len > 0)
-    				DUST_Save_To_Ram(uart_frame, RAM_frame_len);
-            }
-
-            // Invio dati una volta ogni N giri
-            if (sending_round >= SENDING_ROUND)
-            {
-            	sending_round = 0;
-
-            	if ((huart1.gState == HAL_UART_STATE_READY) && (g_usb_dust_stream_enabled == 1))
-    			{
-            		DUST_SendFrame_UART();
-    			}
-            	else if(g_ble_dust_stream_enabled == 1)
-            	{
-            		UTIL_SEQ_SetTask(1U << CFG_TASK_MYDATA_UPDATE_ID, CFG_SEQ_PRIO_0);
-            	}
-            }
-
+            hadc4.Instance->CR |= ADC_CR_ADVREGEN;
+            // Delay a vuoto veloce per stabilizzare il regolatore (~20us)
+            uint32_t wait_loop = (SystemCoreClock / 1000000UL) * 20;
+            while(wait_loop--) { __NOP(); }
         }
-		//int len = sprintf(uart_text_buffer, "CH %02u RAW:%5u FILT:%5u\r\n", g_current_dust_channel, adc_val, filtered);
-		//HAL_UART_Transmit_DMA(&huart1, (uint8_t*)uart_text_buffer, len);
 
+        // 3. LANCIO DMA AUTOMATICO!
+        // L'ADC leggerà Rank 1 e Rank 2 alla massima velocità e li butterà in adc_dma_buf
+        if (HAL_ADC_Start_DMA(&hadc4, (uint32_t*)adc_dma_buf, 2) != HAL_OK)
+        {
+            // Se fallisce (es. errore hardware), sblocchiamo il semaforo
+            g_processing_lock = 0;
+        }
     }
+}
+
+// =========================================================
+// 2. LA CALLBACK DELL'ADC (Scatta in automatico a fine lettura)
+// =========================================================
+
+void ADC_Start_Task(void)
+{
+    adc_read_step = 1;
+
+    // 1. FORZIAMO IL CLOCK DELLA PERIFERICA (in caso il Low Power lo abbia tagliato)
+    __HAL_RCC_ADC4_CLK_ENABLE();
+
+    // 2. FERMIAMO LA HAL per resettare lo stato interno
+    HAL_ADC_Stop(&hadc4);
+
+    // 3. RISVEGLIAMO L'HARDWARE (Uscita dal Low Power)
+    // Riaccendiamo il regolatore di tensione interno dell'ADC (Il vero colpevole)
+    if ((hadc4.Instance->CR & ADC_CR_ADVREGEN) == 0)
+    {
+        hadc4.Instance->CR |= ADC_CR_ADVREGEN;
+        // Il regolatore richiede tempo per stabilizzarsi (almeno 20us).
+        // Usiamo un delay brutale a colpi di clock per non bloccare gli interrupt.
+        uint32_t wait_loop_index = (SystemCoreClock / 1000000UL) * 20;
+        while(wait_loop_index != 0) { wait_loop_index--; }
+    }
+
+    // 4. LANCIO DEFINITIVO
+    HAL_StatusTypeDef status = HAL_ADC_Start_IT(&hadc4);
+
+    if (status == HAL_BUSY)
+    {
+        adc_read_step = 0;
+        LED_BLINKING(TIM_CHANNEL_2, pwm_buf); // ROSSO: Problema software (improbabile ora)
+    }
+    else if (status == HAL_ERROR)
+    {
+        adc_read_step = 0;
+        LED_BLINKING(TIM_CHANNEL_1, pwm_buf); // BLU: Se si accende ancora, il problema è a monte
+    }
+
+    if (status != HAL_OK)
+        {
+            adc_read_step = 0;
+            g_processing_lock = 0; // Rilascia il blocco in caso di errore!
+        }
+}
+
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
+{
+    if (hadc->Instance == ADC4)
+    {
+        // I dati sono già stati estratti dall'hardware tramite DMA!
+        g_ch[g_current_channel].last_adc_neg = (uint8_t)adc_dma_buf[0]; // Rank 1: ADC4_IN8 = PA1 = OUT_N
+        g_ch[g_current_channel].last_adc_pos = (uint8_t)adc_dma_buf[1]; // Rank 2: ADC4_IN4 = PA5 = OUT_P
+
+        // Fermiamo la modalità DMA dell'ADC in preparazione del prossimo giro
+        HAL_ADC_Stop_DMA(&hadc4);
+
+        // Inneschiamo la task per l'elaborazione e la trasmissione (registrata in BLE_SENSOR_APP_Init)
+        UTIL_SEQ_SetTask(1U << CFG_TASK_DUST_PROCESS_ID, CFG_SEQ_PRIO_0);
+    }
+}
+
+// Overrun o errore DMA dell'ADC4: la ConvCpltCallback non arriverà, quindi fermiamo
+// l'ADC e liberiamo il semaforo (il campione è perso, si riparte al prossimo LPTIM)
+void HAL_ADC_ErrorCallback(ADC_HandleTypeDef* hadc)
+{
+    if (hadc->Instance == ADC4)
+    {
+        g_adc_error_count++;
+        HAL_ADC_Stop_DMA(&hadc4);
+        g_processing_lock = 0;
+    }
+}
+//void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
+//{
+//	LED_BLINKING(TIM_CHANNEL_1, pwm_buf); //green
+//    if (hadc->Instance == ADC4)
+//    {
+//        g_ch[g_current_channel].last_adc_pos = (uint8_t)HAL_ADC_GetValue(&hadc4);
+//        g_ch[g_current_channel].last_adc_neg = 0;
+//        adc_read_step = 0;
+//        UTIL_SEQ_SetTask(1U << 20, CFG_SEQ_PRIO_0);
+//    }
+//}
+
+// =========================================================
+// 2. IL TASK IN BACKGROUND (Sicuro, può usare i delay e il polling)
+// =========================================================
+void DUST_Process_ADC_Task(void)
+{
+    // Niente LED_BLINKING qui: la task gira a ogni campione (~1.3 kHz) e riavvierebbe
+    // il PWM di TIM3 ogni volta. Il LED blu di connessione lo imposta già app_ble.c
+
+    uint32_t now_ms = HAL_GetTick(); // Ora non va più in stallo!
+
+    // 1. Legge gli ADC interni
+    //g_ch[pending_ch_idx].last_adc_pos = Read_Split_ADC(ADC_CHANNEL_8);
+    //g_ch[pending_ch_idx].last_adc_neg = Read_Split_ADC(ADC_CHANNEL_4);
+
+    // 2. Processa l'algoritmo particelle
+    DUST_Process(pending_ch_idx, pending_spi_val, now_ms);
+
+    next_ch++;
+
+    // 3. Gestione invio pacchetti
+    if (next_ch >= DUST_CHANNELS)
+    {
+        next_ch = 0u;
+        sending_round++;
+
+        if (g_enable_sd_saving == 1)
+        {
+            uint16_t RAM_frame_len = DUST_BuildFrame_RAM(uart_frame, sizeof(uart_frame));
+            if(RAM_frame_len > 0)
+                DUST_Save_To_Ram(uart_frame, RAM_frame_len);
+        }
+
+        if (sending_round >= SENDING_ROUND)
+        {
+            sending_round = 0;
+            if ((huart1.gState == HAL_UART_STATE_READY) && (g_usb_dust_stream_enabled == 1))
+            {
+                DUST_SendFrame_UART();
+            }
+            else if(g_ble_dust_stream_enabled == 1)
+            {
+                // Richiama il task che invia fisicamente i dati via Bluetooth
+                UTIL_SEQ_SetTask(1U << CFG_TASK_MYDATA_UPDATE_ID, CFG_SEQ_PRIO_0);
+            }
+        }
+    }
+    g_processing_lock = 0;
 }
 
 // ------------------- algoritmo canali ------------------- //
@@ -642,6 +935,12 @@ static void DUST_Internal_ResetChannel(DustChannelState_t *s)
     s->event_timestamp_ms = 0u;
     s->particle_count  = 0u;
     s->warmup_cnt        = 0u;
+
+    memset(s->history, 0, sizeof(s->history));
+	s->hist_idx          = 0u;
+	s->initial_baseline  = 0u;
+	s->peak_val          = 0u;
+	s->step_dir          = 0;
 }
 
 // Moving average su una finestra di DUST_MAVG_WINDOW campioni
@@ -752,6 +1051,10 @@ void DUST_Process(uint8_t channel, uint16_t raw_sample, uint32_t timestamp_ms)
     uint8_t ch = channel;
     if (ch >= DUST_CHANNELS) return;
 
+    // Ignora il canale 1 (rotto) - Nel firmware gli indici partono da 0! Quindi CH 1 è l'indice 0.
+    // Se sulla GUI lo vedevi come "CH 1", qui corrisponde a "ch == 0". Modificalo se intendevi un altro indice.
+    //if (ch == 0) return;
+
     DustChannelState_t *s = &g_ch[ch];
 
     // 1) Moving average (Sempre attiva per pulire il segnale)
@@ -759,123 +1062,120 @@ void DUST_Process(uint8_t channel, uint16_t raw_sample, uint32_t timestamp_ms)
     s->last_raw = raw_sample;
 
     // --- WARM-UP ---
-    // All'avvio non sappiamo dove sia il segnale. Per i primi campioni
-    // ci limitiamo a inseguirlo per trovare il punto di partenza.
     if (s->warmup_cnt < DUST_WARMUP_SAMPLES)
     {
         s->warmup_cnt++;
         s->baseline = filtered;
+
+        // Riempiamo anche l'history per non avere zeri all'inizio
+        s->history[s->hist_idx] = filtered;
+        s->hist_idx = (s->hist_idx + 1) % DUST_MAX_TRIG_STEP;
+
         s->state = DUST_STATE_MONITORING;
-        s->over_cnt = 0;
         return;
     }
 
-    // Calcoliamo la differenza ASSOLUTA (per vedere sia salite che discese)
-    // Cast a int32_t per gestire valori negativi prima dell'abs
-    int32_t diff = (int32_t)filtered - (int32_t)s->baseline;
-    uint16_t abs_diff = (uint16_t)abs(diff);
+    // Sicurezza: se cambiamo il parametro in volo dalla GUI, l'indice potrebbe trovarsi fuori limite
+    if (s->hist_idx >= g_dust_trig_step) s->hist_idx = 0;
 
-    // 4) State machine
+    // --- GESTIONE TRIGGER STEP (Lettura passato) ---
+    uint16_t oldest_val = s->history[s->hist_idx]; // Campione di 'DUST_TRIG_STEP' iterazioni fa
+    s->history[s->hist_idx] = filtered;            // Aggiorno con il nuovo
+    s->hist_idx = (s->hist_idx + 1) % g_dust_trig_step;
+
+    // Macchina a Stati
     switch (s->state)
     {
         case DUST_STATE_MONITORING:
         {
-            // Se c'è un salto brusco (in alto O in basso) maggiore della soglia
-            if (abs_diff > dust_thresh_offset)
-            {
-                if (s->over_cnt < 255u) s->over_cnt++;
+            // Calcoliamo la differenza dal campione passato (Trigger Step)
+            int32_t diff = (int32_t)filtered - (int32_t)oldest_val;
+            uint32_t abs_diff = abs(diff);
 
-                // Se il salto persiste per un po' (filtro spike veloci)
-                if (s->over_cnt >= DUST_MIN_OVER_SAMPLES)
-                {
-                    s->state              = DUST_STATE_CONFIRMING;
-                    s->over_cnt           = 0u;
-                    // Reset buffer evento
-                    s->event_len          = 0u;
-                    s->event_timestamp_ms = timestamp_ms;
-                }
+            if (abs_diff > g_dust_thresh)
+            {
+                // INNESCO! Andiamo in FOUND per la Window di valutazione
+                s->state              = DUST_STATE_FOUND;
+                s->refr_cnt           = g_dust_window;
+
+                // Salviamo le caratteristiche
+                s->initial_baseline   = oldest_val;
+                s->step_dir           = (diff > 0) ? 1 : -1;
+                s->peak_val           = filtered;
+
+                // Reset buffer evento
+                s->event_len          = 0u;
+                s->event_timestamp_ms = timestamp_ms;
+                if (s->event_len < DUST_EVENT_SAMPLES) s->event_buf[s->event_len++] = filtered;
             }
             else
             {
-                s->over_cnt = 0u;
-
-                // Se il segnale è stabile (nessun salto), aggiorniamo LENTAMENTE la baseline
-                // per inseguire la deriva termica (Drift)
-                s->baseline = DUST_Internal_Baseline_Update(s->baseline,
-                                                            filtered,
-                                                            DUST_BASE_SHIFT);
+                // Segnale stabile, aggiorniamo lentamente la baseline per la deriva termica
+                s->baseline = DUST_Internal_Baseline_Update(s->baseline, filtered, DUST_BASE_SHIFT);
             }
         } break;
 
         case DUST_STATE_CONFIRMING:
-        {
-            // Continuiamo a verificare se il segnale è ancora "lontano" dalla vecchia baseline
-            // Questo gestisce il fatto che il fronte di salita dura 4-5 campioni
-            if (abs_diff > dust_thresh_offset)
-            {
-                if (s->over_cnt < 255u) s->over_cnt++;
-
-                // Se persiste per 4 campioni, è un gradino confermato!
-                if (s->over_cnt >= 4u)
-                {
-                    // 1. CONTIAMO LA PARTICELLA
-                    s->particle_count++;
-
-                    // 2. CAMBIAMO STATO
-                    // Non andiamo in MONITORING, ma in FOUND/STABILIZING
-                    // per assorbire il resto della salita/discesa e aggiornare il riferimento.
-                    s->state = DUST_STATE_FOUND;
-
-                    // Impostiamo un tempo morto (Dead Time) in cui inseguiamo il segnale
-                    // 10 campioni dovrebbero bastare per far finire la transizione del gradino
-                    s->refr_cnt = 16;
-
-                    // Salva dati evento
-                    if (s->event_len < DUST_EVENT_SAMPLES) s->event_buf[s->event_len++] = filtered;
-                }
-            }
-            else
-            {
-                // Era solo un rumore momentaneo, torniamo a monitorare
-                s->state = DUST_STATE_MONITORING;
-                s->over_cnt = 0u;
-            }
-
-        } break;
+            // STATO OBSOLETO: non serve più con il nuovo approccio DSP.
+            s->state = DUST_STATE_MONITORING;
+            break;
 
         case DUST_STATE_FOUND:
         {
-            // --- FASE DI ASSESTAMENTO (LATCHING) ---
-            // In questa fase sappiamo che il segnale è cambiato livello.
-            // Dobbiamo aggiornare la baseline al NUOVO livello.
-
-            // 1. Aggiornamento forzato della baseline
-            // Facciamo sì che la baseline "insegua" velocemente il segnale mentre finisce di salire/scendere
+            // Inseguiamo la baseline forzata per tenerci pronti
             s->baseline = filtered;
 
-            // 2. Decremento timer
+            // Aggiorniamo il picco se viene superato
+            if (s->step_dir == 1 && filtered > s->peak_val) s->peak_val = filtered;
+            if (s->step_dir == -1 && filtered < s->peak_val) s->peak_val = filtered;
+
+            if (s->event_len < DUST_EVENT_SAMPLES) s->event_buf[s->event_len++] = filtered;
+
             if (s->refr_cnt > 0u)
             {
                 s->refr_cnt--;
             }
             else
             {
-                // Fine del tempo di assestamento.
-                // Ora la baseline è allineata al nuovo livello del gradino.
-                // Possiamo tornare a cercare nuove variazioni rispetto a QUESTO nuovo livello.
-                s->state = DUST_STATE_MONITORING;
-                s->over_cnt = 0u;
+                // --- FINE FINESTRA: MOMENTO DELLA DECISIONE ---
+                int32_t final_diff = (int32_t)filtered - (int32_t)s->initial_baseline;
+                int32_t peak_diff  = (int32_t)s->peak_val - (int32_t)s->initial_baseline;
 
-                // Callback evento completato
+                uint32_t abs_final_diff = abs(final_diff);
+                uint32_t abs_peak_diff  = abs(peak_diff);
+
+                // 1. Controllo Whipsaw (Inversione netta)
+                uint8_t is_whipsaw = 0;
+                if ((s->step_dir == 1 && final_diff < 0) || (s->step_dir == -1 && final_diff > 0)) {
+                    is_whipsaw = 1;
+                }
+
+                // 2. Controllo Recovery Ratio usando MATEMATICA INTERA
+                // In Python: (abs(peak - final) / abs(peak_diff)) > 0.18
+                // In C:      (abs(peak - final) * 100) > (abs(peak_diff) * 18)
+                uint8_t is_recovery = 0;
+                if (abs_peak_diff != 0)
+                {
+                    uint32_t recovery_dist = abs((int32_t)s->peak_val - (int32_t)filtered);
+                    if ((recovery_dist * 100u) > (abs_peak_diff * g_dust_rec_ratio_pct))
+                    {
+                        is_recovery = 1;
+                    }
+                }
+                else
+                {
+                    is_recovery = 1; // Sicurezza anti-divisione per zero / evento nullo
+                }
+
+                // 3. Decisione Finale
+                if (!is_whipsaw && !is_recovery && abs_final_diff > g_dust_thresh)
+                {
+                    s->particle_count++; // ✅ Particella vera!
+                }
+
+                s->state = DUST_STATE_MONITORING;
                 DUST_Internal_CallCallback(ch, s);
             }
-
-            // Salvataggio campioni per debug
-            if (s->event_len < DUST_EVENT_SAMPLES)
-            {
-                s->event_buf[s->event_len++] = filtered;
-            }
-
         } break;
 
         default:
@@ -893,16 +1193,31 @@ uint16_t DUST_BuildFrame(uint8_t *dst, uint16_t max_len)
     *p++ = FRAME_SYNC2;
 
     // Corpo: per ogni canale -> [PKT_SYNC_CAN][CHANNEL][PARTICLES][ADC_MSB][ADC_LSB]
-    for (uint8_t ch = 0; ch < DUST_CHANNELS; ch++)
-    {
-        uint16_t adc = g_ch[ch].last_raw;        // oppure last_filtered
+//    for (uint8_t ch = 0; ch < DUST_CHANNELS; ch++)
+//    {
+//        uint16_t adc = g_ch[ch].last_raw;        // oppure last_filtered
+//
+//        //*p++ = PKT_SYNC_CAN;
+//        //*p++ = ch;                               // channel number
+//        *p++ = g_ch[ch].particle_count;
+//        *p++ = (uint8_t)(adc >> 8);              // ADC_HI
+//        *p++ = (uint8_t)(adc & 0xFF);            // ADC_LO
+//    }
 
-        //*p++ = PKT_SYNC_CAN;
-        //*p++ = ch;                               // channel number
-        *p++ = g_ch[ch].particle_count;
-        *p++ = (uint8_t)(adc >> 8);              // ADC_HI
-        *p++ = (uint8_t)(adc & 0xFF);            // ADC_LO
-    }
+
+    // Corpo: [PARTICLES][SPI_MSB][SPI_LSB][ADC_POS_8BIT][ADC_NEG_8BIT]
+	for (uint8_t ch = 0; ch < DUST_CHANNELS; ch++)
+	{
+		uint16_t spi_adc = g_ch[ch].last_raw; // Questo lo lasciamo a 16 bit se il sensore esterno lo richiede
+		uint8_t  adc_pos = g_ch[ch].last_adc_pos;
+		uint8_t  adc_neg = g_ch[ch].last_adc_neg;
+
+		*p++ = g_ch[ch].particle_count;
+		*p++ = (uint8_t)(spi_adc >> 8);
+		*p++ = (uint8_t)(spi_adc & 0xFF);
+		*p++ = adc_pos;
+		*p++ = adc_neg;
+	}
 
     // Terminatore di riga
     *p++ = '\r';

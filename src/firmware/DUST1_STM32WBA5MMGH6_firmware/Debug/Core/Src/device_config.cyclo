@@ -1,0 +1,12 @@
+../Core/Src/device_config.c:69:17:devcfg_crc32	3
+../Core/Src/device_config.c:86:16:devcfg_name_valid	12
+../Core/Src/device_config.c:105:16:devcfg_page_is_free	4
+../Core/Src/device_config.c:111:16:devcfg_record_valid	5
+../Core/Src/device_config.c:118:13:devcfg_finish	1
+../Core/Src/device_config.c:124:13:devcfg_start_erase	5
+../Core/Src/device_config.c:142:13:devcfg_start_write	5
+../Core/Src/device_config.c:162:13:devcfg_verify	4
+../Core/Src/device_config.c:181:13:DEVCFG_FlashCallback	9
+../Core/Src/device_config.c:218:6:DEVCFG_Init	5
+../Core/Src/device_config.c:230:13:DEVCFG_GetName	2
+../Core/Src/device_config.c:239:6:DEVCFG_RequestRename	9

@@ -78,7 +78,8 @@ typedef struct
 void BLE_SENSOR_APP_Init(void);
 void BLE_SENSOR_APP_EvtRx(BLE_SENSOR_APP_ConnHandleNotEvt_t *p_Notification);
 /* USER CODE BEGIN EFP */
-
+/* Risposta ai comandi (es. 'L', nome del dispositivo) come notifica sulla caratteristica RECDATA */
+void BLE_SENSOR_APP_SendReply(const char *p_text);
 /* USER CODE END EFP */
 
 #ifdef __cplusplus

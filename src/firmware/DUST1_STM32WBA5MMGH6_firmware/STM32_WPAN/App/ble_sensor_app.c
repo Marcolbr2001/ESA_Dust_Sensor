@@ -233,12 +233,38 @@ void BLE_SENSOR_APP_Init(void)
 
   // registra la task che invia il pacchetto
   UTIL_SEQ_RegTask(1U << CFG_TASK_MYDATA_UPDATE_ID, UTIL_SEQ_RFU, MYDATA_Update);
+
+  // registra la task di elaborazione dei campioni (lanciata da HAL_ADC_ConvCpltCallback).
+  // Senza registrazione il sequencer scarta la richiesta, g_processing_lock non viene
+  // mai rilasciato e l'acquisizione si ferma dopo il primo campione
+  UTIL_SEQ_RegTask(1U << CFG_TASK_DUST_PROCESS_ID, UTIL_SEQ_RFU, DUST_Process_ADC_Task);
+
   /* USER CODE END Service1_APP_Init */
   return;
 }
 
 /* USER CODE BEGIN FD */
+/* Risposta sempre di 20 byte (SizeRecdata in ble_sensor.c) completata con zeri: la GUI legge fino
+ * al primo zero, e nessun resto dei comandi precedenti finisce nella notifica anche se RECDATA
+ * tornasse a lunghezza fissa (es. rigenerando il codice con CubeMX) */
+#define RECDATA_REPLY_LEN   20u
 
+void BLE_SENSOR_APP_SendReply(const char *p_text)
+{
+  uint8_t buf[RECDATA_REPLY_LEN] = {0};
+  BLE_SENSOR_Data_t pkt;
+  size_t n = strlen(p_text);
+
+  if (n > sizeof(buf))
+  {
+    n = sizeof(buf);
+  }
+  memcpy(buf, p_text, n);
+
+  pkt.p_Payload = buf;
+  pkt.Length = (uint8_t)sizeof(buf);
+  BLE_SENSOR_UpdateValue(BLE_SENSOR_RECDATA, &pkt);
+}
 /* USER CODE END FD */
 
 /*************************************************************

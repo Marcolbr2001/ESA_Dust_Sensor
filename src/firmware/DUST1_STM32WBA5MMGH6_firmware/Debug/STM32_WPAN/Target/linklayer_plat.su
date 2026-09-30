@@ -27,7 +27,7 @@
 ../STM32_WPAN/Target/linklayer_plat.c:521:6:LINKLAYER_PLAT_StopRadioEvt	8	static
 ../STM32_WPAN/Target/linklayer_plat.c:535:6:LINKLAYER_PLAT_RCOStartClbr	8	static
 ../STM32_WPAN/Target/linklayer_plat.c:553:6:LINKLAYER_PLAT_RCOStopClbr	8	static
-../STM32_WPAN/Target/linklayer_plat.c:569:6:LINKLAYER_PLAT_RequestTemperature	8	static
+../STM32_WPAN/Target/linklayer_plat.c:569:6:LINKLAYER_PLAT_RequestTemperature	4	static
 ../STM32_WPAN/Target/linklayer_plat.c:581:6:LINKLAYER_PLAT_PhyStartClbr	4	static
 ../STM32_WPAN/Target/linklayer_plat.c:597:6:LINKLAYER_PLAT_PhyStopClbr	4	static
 ../STM32_WPAN/Target/linklayer_plat.c:613:6:LINKLAYER_PLAT_SCHLDR_TIMING_UPDATE_NOT	16	static

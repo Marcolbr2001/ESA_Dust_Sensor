@@ -34,6 +34,7 @@
 /* USER CODE END Includes */
 
 /* External variables --------------------------------------------------------*/
+extern DMA_HandleTypeDef handle_GPDMA1_Channel5;
 extern RAMCFG_HandleTypeDef hramcfg_SRAM1;
 extern DMA_HandleTypeDef handle_GPDMA1_Channel4;
 extern DMA_HandleTypeDef handle_GPDMA1_Channel3;
@@ -98,6 +99,7 @@ void MX_StandbyExit_PeripheralInit(void)
     __HAL_RCC_GPIOB_CLK_DISABLE();
 #endif /* CFG_DEBUGGER_LEVEL */
 
+  memset(&handle_GPDMA1_Channel5, 0, sizeof(handle_GPDMA1_Channel5));
   memset(&hramcfg_SRAM1, 0, sizeof(hramcfg_SRAM1));
   memset(&handle_GPDMA1_Channel4, 0, sizeof(handle_GPDMA1_Channel4));
   memset(&handle_GPDMA1_Channel3, 0, sizeof(handle_GPDMA1_Channel3));

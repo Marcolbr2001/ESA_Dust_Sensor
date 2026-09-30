@@ -356,6 +356,7 @@ typedef enum
   CFG_TASK_FLASH_MANAGER,
   /* USER CODE BEGIN CFG_Task_Id_t */
   CFG_TASK_MYDATA_UPDATE_ID,
+  CFG_TASK_DUST_PROCESS_ID,
   /* USER CODE END CFG_Task_Id_t */
   CFG_TASK_NBR /* Shall be LAST in the list */
 } CFG_Task_Id_t;
@@ -459,7 +460,7 @@ typedef enum
  * HW RADIO configuration
  ******************************************************************************/
 /* Link Layer uses temperature based calibration (0 --> NO ; 1 --> YES) */
-#define USE_TEMPERATURE_BASED_RADIO_CALIBRATION  (1)
+#define USE_TEMPERATURE_BASED_RADIO_CALIBRATION  (0)
 
 #define RADIO_INTR_NUM                      RADIO_IRQn     /* 2.4GHz RADIO global interrupt */
 #define RADIO_INTR_PRIO_HIGH                (0)            /* 2.4GHz RADIO interrupt priority when radio is Active */

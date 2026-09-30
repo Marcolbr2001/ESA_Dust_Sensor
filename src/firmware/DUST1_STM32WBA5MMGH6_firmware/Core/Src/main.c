@@ -50,6 +50,7 @@
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc4;
+DMA_HandleTypeDef handle_GPDMA1_Channel5;
 
 COMP_HandleTypeDef hcomp1;
 
@@ -411,11 +412,56 @@ int main(void)
   MX_TIM1_Init();
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
+
+  // La task DUST_Process_ADC_Task è registrata in BLE_SENSOR_APP_Init() con l'ID
+  // CFG_TASK_DUST_PROCESS_ID (app_conf.h): non usare ID numerici fissi
+
   //HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET);
+  MX_ADC4_Init();
+  HAL_ADCEx_Calibration_Start(&hadc4);
+
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET); //Con questa linea attiviamo la board del sensore
   DUST_Init();
   DUST_SetCallback(MyDustEventHandler);
 
+
+    // ========================================================
+      // 2. RISVEGLIO ADC BARE-METAL (Niente blocchi HAL)
+      // ========================================================
+//      hadc4.Instance->CR |= ADC_CR_ADVREGEN; // Accende il regolatore
+//      HAL_Delay(1);                          // Aspetta 1ms
+//      hadc4.Instance->CR |= ADC_CR_ADEN;     // Abilita l'ADC
+//
+//      uint32_t tickstart = HAL_GetTick();
+//      while((hadc4.Instance->ISR & ADC_ISR_ADRDY) == 0) // Aspetta che sia pronto
+//      {
+//          if((HAL_GetTick() - tickstart) > 10) while(1); // Errore hardware
+//      }
+//
+//      // ========================================================
+//      // 3. TEST POLLING PURO (Rank 1 e Rank 2)
+//      // ========================================================
+//
+//      // ---> FASE 1: LED ROSSO (Inizio Lettura CH8) <---
+//      LED_BLINKING(TIM_CHANNEL_2, pwm_buf_main);
+//
+//      // Avviamo e aspettiamo il Rank 1 (Canale 8)
+//      if (HAL_ADC_Start(&hadc4) != HAL_OK) while(1);
+//      if (HAL_ADC_PollForConversion(&hadc4, 100) != HAL_OK) while(1); // Timeout? Blocco sul rosso
+//
+//      uint32_t test_val_pos = HAL_ADC_GetValue(&hadc4); // Estrae il dato
+//
+//      // ---> FASE 2: LED BLU (Inizio Lettura CH4) <---
+//      LED_BLINKING(TIM_CHANNEL_3, pwm_buf_main);
+//
+//      // Avviamo e aspettiamo il Rank 2 (Canale 4)
+//      if (HAL_ADC_Start(&hadc4) != HAL_OK) while(1);
+//      if (HAL_ADC_PollForConversion(&hadc4, 100) != HAL_OK) while(1); // Timeout? Blocco sul blu
+//
+//      uint32_t test_val_neg = HAL_ADC_GetValue(&hadc4); // Estrae il dato
+//      HAL_ADC_Stop(&hadc4);
+//      // ---> FASE 3: LED VERDE (SUCCESSO TOTALE!) <---
+//      LED_BLINKING(TIM_CHANNEL_1, pwm_buf_main);
   LED_BLINKING(TIM_CHANNEL_1, pwm_buf_main); // --> Red turns on, board ON (green is tim_1)
 
 
@@ -540,14 +586,7 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.LSEState = RCC_LSE_ON;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-  RCC_OscInitStruct.PLL1.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL1.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL1.PLLM = 2;
-  RCC_OscInitStruct.PLL1.PLLN = 12;
-  RCC_OscInitStruct.PLL1.PLLP = 2;
-  RCC_OscInitStruct.PLL1.PLLQ = 2;
-  RCC_OscInitStruct.PLL1.PLLR = 2;
-  RCC_OscInitStruct.PLL1.PLLFractional = 0;
+  RCC_OscInitStruct.PLL1.PLLState = RCC_PLL_NONE;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -558,15 +597,15 @@ void SystemClock_Config(void)
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2
                               |RCC_CLOCKTYPE_PCLK7|RCC_CLOCKTYPE_HCLK5;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSE;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
   RCC_ClkInitStruct.APB7CLKDivider = RCC_HCLK_DIV1;
-  RCC_ClkInitStruct.AHB5_PLL1_CLKDivider = RCC_SYSCLK_PLL1_DIV3;
+  RCC_ClkInitStruct.AHB5_PLL1_CLKDivider = RCC_SYSCLK_PLL1_DIV1;
   RCC_ClkInitStruct.AHB5_HSEHSI_CLKDivider = RCC_SYSCLK_HSEHSI_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
   {
     Error_Handler();
   }
@@ -621,22 +660,23 @@ void MX_ADC4_Init(void)
   /** Common config
   */
   hadc4.Instance = ADC4;
-  hadc4.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV1;
-  hadc4.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc4.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV16;
+  hadc4.Init.Resolution = ADC_RESOLUTION_8B;
   hadc4.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc4.Init.ScanConvMode = ADC_SCAN_DISABLE;
+  hadc4.Init.ScanConvMode = ADC_SCAN_ENABLE;
   hadc4.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
   hadc4.Init.LowPowerAutoPowerOff = DISABLE;
   hadc4.Init.LowPowerAutonomousDPD = ADC_LP_AUTONOMOUS_DPD_DISABLE;
   hadc4.Init.LowPowerAutoWait = DISABLE;
   hadc4.Init.ContinuousConvMode = DISABLE;
-  hadc4.Init.NbrOfConversion = 1;
+  hadc4.Init.NbrOfConversion = 2;
+  hadc4.Init.DiscontinuousConvMode = DISABLE;
   hadc4.Init.ExternalTrigConv = ADC_SOFTWARE_START;
   hadc4.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
   hadc4.Init.DMAContinuousRequests = DISABLE;
   hadc4.Init.TriggerFrequencyMode = ADC_TRIGGER_FREQ_LOW;
   hadc4.Init.Overrun = ADC_OVR_DATA_OVERWRITTEN;
-  hadc4.Init.SamplingTimeCommon1 = ADC_SAMPLETIME_814CYCLES_5;
+  hadc4.Init.SamplingTimeCommon1 = ADC_SAMPLETIME_79CYCLES_5;
   hadc4.Init.SamplingTimeCommon2 = ADC_SAMPLETIME_1CYCLE_5;
   hadc4.Init.OversamplingMode = DISABLE;
   if (HAL_ADC_Init(&hadc4) != HAL_OK)
@@ -646,15 +686,26 @@ void MX_ADC4_Init(void)
 
   /** Configure Regular Channel
   */
-  sConfig.Channel = ADC_CHANNEL_TEMPSENSOR;
+  sConfig.Channel = ADC_CHANNEL_8;
   sConfig.Rank = ADC_REGULAR_RANK_1;
   sConfig.SamplingTime = ADC_SAMPLINGTIME_COMMON_1;
   if (HAL_ADC_ConfigChannel(&hadc4, &sConfig) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN ADC4_Init 2 */
 
+  /** Configure Regular Channel
+  */
+  sConfig.Channel = ADC_CHANNEL_4;
+  sConfig.Rank = ADC_REGULAR_RANK_2;
+  if (HAL_ADC_ConfigChannel(&hadc4, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN ADC4_Init 2 */
+  // NON abilitare DiscontinuousConvMode: con il DMA un solo start deve convertire
+  // Rank 1 e Rank 2, in modalità discontinua converte solo il Rank 1 e il DMA
+  // resta in attesa del secondo campione per sempre (catena di acquisizione bloccata)
   /* USER CODE END ADC4_Init 2 */
 
 }
@@ -747,10 +798,12 @@ void MX_GPDMA1_Init(void)
     HAL_NVIC_EnableIRQ(GPDMA1_Channel0_IRQn);
     HAL_NVIC_SetPriority(GPDMA1_Channel1_IRQn, 5, 0);
     HAL_NVIC_EnableIRQ(GPDMA1_Channel1_IRQn);
-    HAL_NVIC_SetPriority(GPDMA1_Channel3_IRQn, 0, 0);
+    HAL_NVIC_SetPriority(GPDMA1_Channel3_IRQn, 5, 0);
     HAL_NVIC_EnableIRQ(GPDMA1_Channel3_IRQn);
-    HAL_NVIC_SetPriority(GPDMA1_Channel4_IRQn, 0, 0);
+    HAL_NVIC_SetPriority(GPDMA1_Channel4_IRQn, 5, 0);
     HAL_NVIC_EnableIRQ(GPDMA1_Channel4_IRQn);
+    HAL_NVIC_SetPriority(GPDMA1_Channel5_IRQn, 5, 0);
+    HAL_NVIC_EnableIRQ(GPDMA1_Channel5_IRQn);
 
   /* USER CODE BEGIN GPDMA1_Init 1 */
 
@@ -1194,18 +1247,18 @@ void MX_GPIO_Init(void)
   __HAL_RCC_GPIOC_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, DT_CS_Pin|RES_DCC_Pin|DCC_Sel_Pin|Hfb1_Pin
-                          |Hfb2_Pin|Enable_Sensor_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, DT_CS_Pin|RES_DCC_Pin|DCC_Sel_Pin|OUT_D_Pin
+                          |Hfb1_Pin|Enable_Sensor_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(SD_CS_GPIO_Port, SD_CS_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, S1_Pin|S2_Pin|S3_Pin|S4_Pin
-                          |SEL_Pin|RES_ch_read_Pin, GPIO_PIN_RESET);
+                          |RES_ch_read_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pins : DT_CS_Pin Enable_Sensor_Pin */
-  GPIO_InitStruct.Pin = DT_CS_Pin|Enable_Sensor_Pin;
+  /*Configure GPIO pins : DT_CS_Pin OUT_D_Pin Enable_Sensor_Pin */
+  GPIO_InitStruct.Pin = DT_CS_Pin|OUT_D_Pin|Enable_Sensor_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -1225,13 +1278,6 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : SEL_Pin RES_ch_read_Pin */
-  GPIO_InitStruct.Pin = SEL_Pin|RES_ch_read_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
   /*Configure GPIO pin : MUX_STATUS_Pin */
   GPIO_InitStruct.Pin = MUX_STATUS_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
@@ -1244,36 +1290,31 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   HAL_GPIO_Init(DCC_Counter_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : RES_DCC_Pin DCC_Sel_Pin Hfb2_Pin */
-  GPIO_InitStruct.Pin = RES_DCC_Pin|DCC_Sel_Pin|Hfb2_Pin;
+  /*Configure GPIO pins : RES_DCC_Pin DCC_Sel_Pin */
+  GPIO_InitStruct.Pin = RES_DCC_Pin|DCC_Sel_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : OUT_D_Pin */
-  GPIO_InitStruct.Pin = OUT_D_Pin;
+  /*Configure GPIO pin : Hfb2_Pin */
+  GPIO_InitStruct.Pin = Hfb2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLDOWN;
-  HAL_GPIO_Init(OUT_D_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(Hfb2_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : OUT_P_Pin */
-  GPIO_InitStruct.Pin = OUT_P_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(OUT_P_GPIO_Port, &GPIO_InitStruct);
+  /*Configure GPIO pin : RES_ch_read_Pin */
+  GPIO_InitStruct.Pin = RES_ch_read_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(RES_ch_read_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : OUT_N_Pin */
-  GPIO_InitStruct.Pin = OUT_N_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(OUT_N_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : SD_DETECT_Pin */
-  GPIO_InitStruct.Pin = SD_DETECT_Pin;
+  /*Configure GPIO pins : SEL_Pin SD_DETECT_Pin */
+  GPIO_InitStruct.Pin = SEL_Pin|SD_DETECT_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(SD_DETECT_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 

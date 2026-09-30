@@ -104,10 +104,7 @@ Core/Src/app_entry.o: ../Core/Src/app_entry.c ../Core/Inc/app_common.h \
  ../Projects/Common/WPAN/Modules/Flash/simple_nvm_arbiter.h \
  ../Projects/Common/WPAN/Modules/Flash/simple_nvm_arbiter_common.h \
  ../System/Config/Flash/simple_nvm_arbiter_conf.h \
- ../Projects/Common/WPAN/Modules/Flash/simple_nvm_arbiter_common.h \
- ../Projects/Common/WPAN/Modules/adc_ctrl.h \
- ../Projects/Common/WPAN/Modules/utilities_common.h \
- ../Projects/Common/WPAN/Modules/temp_measurement.h
+ ../Projects/Common/WPAN/Modules/Flash/simple_nvm_arbiter_common.h
 ../Core/Inc/app_common.h:
 ../Core/Inc/app_conf.h:
 ../Projects/Common/WPAN/Interfaces/hw_if.h:
@@ -225,6 +222,3 @@ Core/Src/app_entry.o: ../Core/Src/app_entry.c ../Core/Inc/app_common.h \
 ../Projects/Common/WPAN/Modules/Flash/simple_nvm_arbiter_common.h:
 ../System/Config/Flash/simple_nvm_arbiter_conf.h:
 ../Projects/Common/WPAN/Modules/Flash/simple_nvm_arbiter_common.h:
-../Projects/Common/WPAN/Modules/adc_ctrl.h:
-../Projects/Common/WPAN/Modules/utilities_common.h:
-../Projects/Common/WPAN/Modules/temp_measurement.h:

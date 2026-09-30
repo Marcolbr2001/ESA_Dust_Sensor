@@ -84,7 +84,6 @@ System/Config/LowPower/peripheral_init.o: \
  ../Drivers/STM32WBAxx_HAL_Driver/Inc/stm32wbaxx_ll_dma.h \
  ../Projects/Common/WPAN/Modules/crc_ctrl.h \
  ../Projects/Common/WPAN/Modules/utilities_common.h \
- ../Projects/Common/WPAN/Modules/adc_ctrl.h \
  ../System/Interfaces/stm32_lpm_if.h
 ../Core/Inc/app_conf.h:
 ../Projects/Common/WPAN/Interfaces/hw_if.h:
@@ -176,5 +175,4 @@ System/Config/LowPower/peripheral_init.o: \
 ../Drivers/STM32WBAxx_HAL_Driver/Inc/stm32wbaxx_ll_dma.h:
 ../Projects/Common/WPAN/Modules/crc_ctrl.h:
 ../Projects/Common/WPAN/Modules/utilities_common.h:
-../Projects/Common/WPAN/Modules/adc_ctrl.h:
 ../System/Interfaces/stm32_lpm_if.h:

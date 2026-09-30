@@ -23,6 +23,8 @@
 /* USER CODE BEGIN Includes */
 
 /* USER CODE END Includes */
+extern DMA_HandleTypeDef handle_GPDMA1_Channel5;
+
 extern DMA_HandleTypeDef handle_GPDMA1_Channel4;
 
 extern DMA_HandleTypeDef handle_GPDMA1_Channel3;
@@ -101,6 +103,7 @@ void HAL_MspInit(void)
   */
 void HAL_ADC_MspInit(ADC_HandleTypeDef* hadc)
 {
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
   RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
   if(hadc->Instance==ADC4)
   {
@@ -119,6 +122,48 @@ void HAL_ADC_MspInit(ADC_HandleTypeDef* hadc)
 
     /* Peripheral clock enable */
     __HAL_RCC_ADC4_CLK_ENABLE();
+
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    /**ADC4 GPIO Configuration
+    PA1     ------> ADC4_IN8
+    PA5     ------> ADC4_IN4
+    */
+    GPIO_InitStruct.Pin = OUT_N_Pin|OUT_P_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    /* ADC4 DMA Init */
+    /* GPDMA1_REQUEST_ADC4 Init */
+    handle_GPDMA1_Channel5.Instance = GPDMA1_Channel5;
+    handle_GPDMA1_Channel5.Init.Request = GPDMA1_REQUEST_ADC4;
+    handle_GPDMA1_Channel5.Init.BlkHWRequest = DMA_BREQ_SINGLE_BURST;
+    handle_GPDMA1_Channel5.Init.Direction = DMA_PERIPH_TO_MEMORY;
+    handle_GPDMA1_Channel5.Init.SrcInc = DMA_SINC_FIXED;
+    handle_GPDMA1_Channel5.Init.DestInc = DMA_DINC_INCREMENTED;
+    handle_GPDMA1_Channel5.Init.SrcDataWidth = DMA_SRC_DATAWIDTH_HALFWORD;
+    handle_GPDMA1_Channel5.Init.DestDataWidth = DMA_DEST_DATAWIDTH_HALFWORD;
+    handle_GPDMA1_Channel5.Init.Priority = DMA_LOW_PRIORITY_LOW_WEIGHT;
+    handle_GPDMA1_Channel5.Init.SrcBurstLength = 1;
+    handle_GPDMA1_Channel5.Init.DestBurstLength = 1;
+    handle_GPDMA1_Channel5.Init.TransferAllocatedPort = DMA_SRC_ALLOCATED_PORT0|DMA_DEST_ALLOCATED_PORT0;
+    handle_GPDMA1_Channel5.Init.TransferEventMode = DMA_TCEM_BLOCK_TRANSFER;
+    handle_GPDMA1_Channel5.Init.Mode = DMA_NORMAL;
+    if (HAL_DMA_Init(&handle_GPDMA1_Channel5) != HAL_OK)
+    {
+      Error_Handler();
+    }
+
+    __HAL_LINKDMA(hadc, DMA_Handle, handle_GPDMA1_Channel5);
+
+    if (HAL_DMA_ConfigChannelAttributes(&handle_GPDMA1_Channel5, DMA_CHANNEL_NPRIV) != HAL_OK)
+    {
+      Error_Handler();
+    }
+
+    /* ADC4 interrupt Init */
+    HAL_NVIC_SetPriority(ADC4_IRQn, 5, 0);
+    HAL_NVIC_EnableIRQ(ADC4_IRQn);
     /* USER CODE BEGIN ADC4_MspInit 1 */
 
     /* USER CODE END ADC4_MspInit 1 */
@@ -142,6 +187,18 @@ void HAL_ADC_MspDeInit(ADC_HandleTypeDef* hadc)
     /* USER CODE END ADC4_MspDeInit 0 */
     /* Peripheral clock disable */
     __HAL_RCC_ADC4_CLK_DISABLE();
+
+    /**ADC4 GPIO Configuration
+    PA1     ------> ADC4_IN8
+    PA5     ------> ADC4_IN4
+    */
+    HAL_GPIO_DeInit(GPIOA, OUT_N_Pin|OUT_P_Pin);
+
+    /* ADC4 DMA DeInit */
+    HAL_DMA_DeInit(hadc->DMA_Handle);
+
+    /* ADC4 interrupt DeInit */
+    HAL_NVIC_DisableIRQ(ADC4_IRQn);
     /* USER CODE BEGIN ADC4_MspDeInit 1 */
 
     /* USER CODE END ADC4_MspDeInit 1 */
@@ -288,7 +345,7 @@ void HAL_LPTIM_MspInit(LPTIM_HandleTypeDef* hlptim)
     /* Peripheral clock enable */
     __HAL_RCC_LPTIM1_CLK_ENABLE();
     /* LPTIM1 interrupt Init */
-    HAL_NVIC_SetPriority(LPTIM1_IRQn, 0, 0);
+    HAL_NVIC_SetPriority(LPTIM1_IRQn, 4, 0);
     HAL_NVIC_EnableIRQ(LPTIM1_IRQn);
     /* USER CODE BEGIN LPTIM1_MspInit 1 */
 
@@ -528,7 +585,7 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* hspi)
     }
 
     /* SPI3 interrupt Init */
-    HAL_NVIC_SetPriority(SPI3_IRQn, 0, 0);
+    HAL_NVIC_SetPriority(SPI3_IRQn, 5, 0);
     HAL_NVIC_EnableIRQ(SPI3_IRQn);
     /* USER CODE BEGIN SPI3_MspInit 1 */
 

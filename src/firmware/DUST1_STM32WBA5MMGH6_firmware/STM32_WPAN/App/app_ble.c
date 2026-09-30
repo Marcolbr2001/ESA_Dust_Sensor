@@ -41,6 +41,7 @@
 /* USER CODE BEGIN Includes */
 #include "app_bsp.h"
 #include "DUST_functions.h"
+#include "device_config.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -144,7 +145,8 @@ typedef struct
 
 /* USER CODE BEGIN PD */
 #define ADV_TIMEOUT_MS                 (60 * 1000)
-#define MY_DEVICE_NAME_ADDR  ((uint8_t*)0x080FF000)#define MY_DEVICE_NAME_ADDR  ((uint8_t*)0x080FF000)
+/* Il nome del dispositivo è salvato nella pagina 125 del flash (device_config.c): 0x080FF000
+ * è nella pagina 127, che appartiene allo SNVMA (dati BLE) e non si può usare */
 /* Device Info Characteristic UUID */
 #define COPY_UUID_128(uuid_struct, uuid_15, uuid_14, uuid_13, uuid_12, uuid_11, uuid_10, uuid_9, uuid_8, uuid_7, uuid_6, uuid_5, uuid_4, uuid_3, uuid_2, uuid_1, uuid_0) \
 do {\
@@ -195,6 +197,9 @@ static uint64_t host_nvm_buffer[CFG_BLE_NVM_SIZE_MAX];
 /* USER CODE BEGIN PV */
 uint8_t a_GATT_DevInfoData[22];
 uint16_t pwm_buf_ble[] = {13000, 13000, 0, 0, 0, 0, 0, 0, 0, 0}; //to use in case of PWM DMA
+/* Advertising data effettivi: nome salvato nel flash + le altre AD di a_AdvData.
+ * 28 byte = 31 dell'advertising legacy - 3 dei flag aggiunti dallo stack */
+static uint8_t a_AdvDataDyn[28];
 /* USER CODE END PV */
 
 /* Global variables ----------------------------------------------------------*/
@@ -217,6 +222,7 @@ static void gap_cmd_resp_wait(void);
 static void gap_cmd_resp_release(void);
 /* USER CODE BEGIN PFP */
 static void fill_advData(uint8_t *p_adv_data, uint8_t tab_size, const uint8_t*p_bd_addr);
+static uint8_t build_advData(uint8_t *p_dst, uint8_t dst_size);
 /* USER CODE END PFP */
 
 /* External variables --------------------------------------------------------*/
@@ -930,7 +936,9 @@ void APP_BLE_Procedure_Gap_Peripheral(ProcGapPeripheralId_t ProcGapPeripheralId)
       adv_data_p = &a_AdvData[0];
       adv_data_len = sizeof(a_AdvData);
       /* USER CODE BEGIN ADV_DATA_UPDATE_1 */
-
+      /* Nome salvato nel flash (device_config.c) al posto di quello fisso di a_AdvData */
+      adv_data_len = build_advData(&a_AdvDataDyn[0], sizeof(a_AdvDataDyn));
+      adv_data_p = &a_AdvDataDyn[0];
       /* USER CODE END ADV_DATA_UPDATE_1 */
       status = aci_gap_update_adv_data(adv_data_len, adv_data_p);
       if (status != BLE_STATUS_SUCCESS)
@@ -972,7 +980,8 @@ void APP_BLE_Procedure_Gap_Peripheral(ProcGapPeripheralId_t ProcGapPeripheralId)
       adv_data_p = &a_AdvData[0];
       adv_data_len = sizeof(a_AdvData);
       /* USER CODE BEGIN ADV_DATA_UPDATE_2 */
-
+      adv_data_len = build_advData(&a_AdvDataDyn[0], sizeof(a_AdvDataDyn));
+      adv_data_p = &a_AdvDataDyn[0];
       /* USER CODE END ADV_DATA_UPDATE_2 */
       status = aci_gap_update_adv_data(adv_data_len, adv_data_p);
       if (status != BLE_STATUS_SUCCESS)
@@ -1297,6 +1306,7 @@ static void Ble_Hci_Gap_Gatt_Init(void)
   bleAppContext.bleSecurityParam.bonding_mode          = CFG_BONDING_MODE;
   /* USER CODE BEGIN Ble_Hci_Gap_Gatt_Init_1 */
   fill_advData(&a_AdvData[0], sizeof(a_AdvData), (uint8_t*) p_bd_addr);
+  DEVCFG_Init();  /* nome del dispositivo dal flash, prima di avviare l'advertising */
   /* USER CODE END Ble_Hci_Gap_Gatt_Init_1 */
 
   ret = aci_gap_set_authentication_requirement(bleAppContext.bleSecurityParam.bonding_mode,
@@ -1715,6 +1725,37 @@ static void BLE_NvmCallback(SNVMA_Callback_Status_t CbkStatus)
 }
 
 /* USER CODE BEGIN FD_LOCAL_FUNCTION */
+
+/* AD del nome (DEVCFG_GetName) + tutte le altre AD di a_AdvData (dati costruttore, vedi fill_advData) */
+static uint8_t build_advData(uint8_t *p_dst, uint8_t dst_size)
+{
+  uint8_t name_len;
+  const char *p_name = DEVCFG_GetName(&name_len);
+  uint8_t n = 0u;
+  uint8_t i = 0u;
+
+  p_dst[n++] = name_len + 1u;
+  p_dst[n++] = AD_TYPE_COMPLETE_LOCAL_NAME;
+  memcpy(&p_dst[n], p_name, name_len);
+  n += name_len;
+
+  while ((i < sizeof(a_AdvData)) && (a_AdvData[i] != 0u))
+  {
+    uint8_t ad_size = a_AdvData[i] + 1u;
+
+    if (((i + ad_size) > sizeof(a_AdvData)) || ((n + ad_size) > dst_size))
+    {
+      break;
+    }
+    if (a_AdvData[i + 1u] != AD_TYPE_COMPLETE_LOCAL_NAME)
+    {
+      memcpy(&p_dst[n], &a_AdvData[i], ad_size);
+      n += ad_size;
+    }
+    i += ad_size;
+  }
+  return n;
+}
 
 static void fill_advData(uint8_t *p_adv_data, uint8_t tab_size, const uint8_t* p_bd_addr)
 {

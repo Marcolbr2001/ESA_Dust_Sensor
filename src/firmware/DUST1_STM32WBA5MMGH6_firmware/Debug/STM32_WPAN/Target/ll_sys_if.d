@@ -86,8 +86,6 @@ STM32_WPAN/Target/ll_sys_if.o: ../STM32_WPAN/Target/ll_sys_if.c \
  ../Middlewares/ST/STM32_WPAN/link_layer/ll_cmd_lib/inc/ll_intf_cmn.h \
  ../STM32_WPAN/Target/ll_sys_if.h ../Core/Inc/stm32_rtos.h \
  ../Utilities/sequencer/stm32_seq.h \
- ../Projects/Common/WPAN/Modules/utilities_common.h \
- ../Projects/Common/WPAN/Modules/temp_measurement.h \
  ../Projects/Common/WPAN/Modules/utilities_common.h
 ../Core/Inc/main.h:
 ../Drivers/STM32WBAxx_HAL_Driver/Inc/stm32wbaxx_hal.h:
@@ -183,6 +181,4 @@ STM32_WPAN/Target/ll_sys_if.o: ../STM32_WPAN/Target/ll_sys_if.c \
 ../STM32_WPAN/Target/ll_sys_if.h:
 ../Core/Inc/stm32_rtos.h:
 ../Utilities/sequencer/stm32_seq.h:
-../Projects/Common/WPAN/Modules/utilities_common.h:
-../Projects/Common/WPAN/Modules/temp_measurement.h:
 ../Projects/Common/WPAN/Modules/utilities_common.h:

@@ -36,7 +36,7 @@ extern LPTIM_HandleTypeDef hlptim1;
 extern SPI_HandleTypeDef hspi3;
 extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim2;
-
+extern ADC_HandleTypeDef hadc4;
 
 extern volatile uint8_t g_ble_dust_stream_enabled;
 extern volatile uint8_t g_usb_dust_stream_enabled;
@@ -57,6 +57,8 @@ void DUST_Save_To_Ram(uint8_t *new_data, uint16_t data_len);
 void Config_PA7_As_GPIO(void);
 void Config_PA7_As_PWM(void);
 
+void ADC_Start_Task(void);
+void DUST_Process_ADC_Task(void);
 
 typedef struct
 {
