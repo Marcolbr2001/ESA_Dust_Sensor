@@ -30,8 +30,12 @@ BT_CHAR_RECVDATA_UUID = "00c10000-0001-11e1-ac36-0002a5d5c51b"  # write
 DUST_CHANNELS = 32
 FRAME_SYNC1 = 0xAA
 FRAME_SYNC2 = 0x55
-FRAME_LEN = 2 + (DUST_CHANNELS * 5) + 2  # Totale 164 bytes
-FRAME_RATE = 20.8  # frame/s dal firmware: un frame ogni 2 giri dei 32 canali (64 x 0.75 ms)
+# Frame (DUST_BuildFrame nel firmware): AA 55 + 32 canali + 0D 0A, per canale
+#   [PARTICLES][SPI_MSB][SPI_LSB][POS_MSB][POS_LSB][NEG_MSB][NEG_LSB] -> 228 byte (OUT_P/OUT_N a 12 bit)
+#   [PARTICLES][SPI_MSB][SPI_LSB][POS][NEG]                           -> 164 byte (firmware precedente, 8 bit)
+FRAME_LAYOUTS = ((7, 2 + DUST_CHANNELS * 7 + 2), (5, 2 + DUST_CHANNELS * 5 + 2))  # (byte per canale, lunghezza)
+FRAME_LEN = FRAME_LAYOUTS[0][1]  # il frame più lungo: deve stare in una notifica (ATT MTU >= FRAME_LEN + 3)
+FRAME_RATE = 62.5  # frame/s dal firmware: un frame ogni 2 giri dei 32 canali (64 x 0.25 ms a 96 MHz)
 
 # --------- Nome del dispositivo (comando 'L', salvato nel flash del sensore) ---------
 DEVICE_NAME_RE = re.compile(r"DUST_[A-Za-z0-9_-]{1,5}")  # max 10 caratteri: limite dell'advertising
@@ -102,7 +106,7 @@ class App(ctk.CTk):
         self.channel_values = [0 for _ in range(DUST_CHANNELS)]
         self.channel_particles = [0 for _ in range(DUST_CHANNELS)]
         self.global_count = 0
-        # ~19 s per canale: serve anche a ritrovare il gradino di ogni particella (vedi _estimate_amplitude)
+        # ~6.4 s per canale a 62.5 frame/s: serve anche a ritrovare il gradino di ogni particella (vedi _estimate_amplitude)
         self.channel_history = [deque(maxlen=400) for _ in range(DUST_CHANNELS)]
 
         # Eventi al secondo (globale e per canale)
@@ -665,12 +669,16 @@ class App(ctk.CTk):
                 return
             if start > 0:
                 del buf[:start]
-            if len(buf) < FRAME_LEN:
-                return
-            candidate = buf[:FRAME_LEN]
-            if not (candidate[-2] == 0x0D and candidate[-1] == 0x0A):
+            # Layout riconosciuto dalla posizione del terminatore 0D 0A (prima il frame più lungo)
+            layout = next(((stride, n) for stride, n in FRAME_LAYOUTS
+                           if len(buf) >= n and buf[n - 2] == 0x0D and buf[n - 1] == 0x0A), None)
+            if layout is None:
+                if len(buf) < FRAME_LEN:
+                    return
                 del buf[0]
                 continue
+            stride, frame_len = layout
+            candidate = buf[:frame_len]
 
             adc_values = [0] * DUST_CHANNELS
             particles_values = [0] * DUST_CHANNELS
@@ -678,22 +686,26 @@ class App(ctk.CTk):
             adc_neg_values = [0] * DUST_CHANNELS
 
             for k in range(DUST_CHANNELS):
-                off = 2 + (k * 5)
+                off = 2 + (k * stride)
                 particles = candidate[off]
                 raw = (candidate[off + 1] << 8) | candidate[off + 2]
                 if raw & 0x8000: raw -= 0x10000
                 adc = abs(raw)
-                adc_pos = candidate[off + 3]
-                adc_neg = candidate[off + 4]
+                if stride == 7:
+                    adc_pos = (candidate[off + 3] << 8) | candidate[off + 4]
+                    adc_neg = (candidate[off + 5] << 8) | candidate[off + 6]
+                else:
+                    # Firmware precedente: codici a 8 bit, riportati sulla scala a 12 bit dei grafici
+                    adc_pos = candidate[off + 3] << 4
+                    adc_neg = candidate[off + 4] << 4
 
-                if 0 <= k < DUST_CHANNELS:
-                    adc_values[k] = adc
-                    particles_values[k] = particles
-                    adc_pos_values[k] = adc_pos
-                    adc_neg_values[k] = adc_neg
+                adc_values[k] = adc
+                particles_values[k] = particles
+                adc_pos_values[k] = adc_pos
+                adc_neg_values[k] = adc_neg
 
             self._handle_dust_frame(adc_values, particles_values, adc_pos_values, adc_neg_values)
-            del buf[:FRAME_LEN]
+            del buf[:frame_len]
 
     def _handle_dust_frame(self, adc_values, particles_values, adc_pos_values, adc_neg_values):
         """Aggiorna solo i dati (costo minimo a ogni frame): il disegno lo fa _render_tick."""
@@ -799,8 +811,8 @@ class App(ctk.CTk):
             window_fw = int(self.settings_tab.dsp_window_var.get()) * 2  # la Dashboard invia Window x2
         except (ValueError, AttributeError):
             window_fw = 100
-        # Un campione per canale ogni 32 periodi LPTIM (0.75 ms) in Auto, ogni periodo in Manual
-        sample_s = 32 * 0.00075 if self.advanced_tab.read_auto_var.get() else 0.00075
+        # Un campione per canale ogni 32 periodi di S0ck (0.25 ms) in Auto, ogni periodo in Manual
+        sample_s = 32 * 0.00025 if self.advanced_tab.read_auto_var.get() else 0.00025
         return int((window_fw * sample_s + 0.8) * FRAME_RATE)
 
     # ---------- CICLO DI RENDER ----------

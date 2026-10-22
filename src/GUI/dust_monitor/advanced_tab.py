@@ -54,6 +54,8 @@ class AdvancedTab(ctk.CTkFrame):
         self._legend_pos.pack(side="left", padx=(8, 6))
         self._legend_neg = ctk.CTkLabel(self._legend, text="┅ OUT_N", font=theme.font(11, "bold"))
         self._legend_neg.pack(side="left")
+        # Asse destro dei grafici: scostamento di ogni traccia dalla sua mediana (widgets.TimeSeriesGraph)
+        theme.caption(self._legend, "mV from median", font=theme.font(11)).pack(side="left", padx=(6, 0))
         self._apply_legend_colors()
         self._sep_mode = theme.separator(g)
         self._sep_mode.pack(side="left", padx=12)

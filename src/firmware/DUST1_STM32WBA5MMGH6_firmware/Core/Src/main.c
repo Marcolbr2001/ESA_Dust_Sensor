@@ -103,7 +103,7 @@ static void MX_LPTIM1_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
-
+static void DUST_SystemClock_Ensure96MHz(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -128,7 +128,7 @@ void SD_Start_Session(void)
     if (g_file_is_open) return;
 
     // Stop ADC temporaneo per init SPI
-    HAL_LPTIM_Counter_Stop_IT(&hlptim1);
+    DUST_Acq_Pause(); // i tick continuano a contare i canali, ma nessun campione usa SPI3
     HAL_SPI_Abort(&hspi3);
     HAL_GPIO_WritePin(GPIOB, DT_CS_Pin, GPIO_PIN_SET);
 
@@ -162,11 +162,8 @@ void SD_Start_Session(void)
     __HAL_SPI_CLEAR_OVRFLAG(&hspi3);
     HAL_GPIO_WritePin(GPIOB, DT_CS_Pin, GPIO_PIN_RESET);
 
-    // Riavvia Timer Acquisizione
-    if (g_usb_dust_stream_enabled || g_ble_dust_stream_enabled)
-    {
-        HAL_LPTIM_Counter_Start_IT(&hlptim1);
-    }
+    // Riprende i campionamenti (se lo stream è attivo)
+    DUST_Acq_Resume();
 
 }
 
@@ -176,7 +173,7 @@ void SD_Write_Fast_Chunk(uint8_t *pData, uint32_t length)
     if (!g_file_is_open) return;
 
     // --- PAUSA ADC (Minimizziamo questo tempo!) ---
-    HAL_LPTIM_Counter_Stop_IT(&hlptim1);
+    DUST_Acq_Pause(); // i tick continuano a contare i canali, ma nessun campione usa SPI3
     HAL_SPI_Abort(&hspi3);
     HAL_GPIO_WritePin(GPIOB, DT_CS_Pin, GPIO_PIN_SET);
 
@@ -223,11 +220,8 @@ void SD_Write_Fast_Chunk(uint8_t *pData, uint32_t length)
     __HAL_SPI_CLEAR_OVRFLAG(&hspi3);
     HAL_GPIO_WritePin(GPIOB, DT_CS_Pin, GPIO_PIN_RESET);
 
-    // Riavvia Timer Acquisizione
-    if (g_usb_dust_stream_enabled || g_ble_dust_stream_enabled)
-    {
-        HAL_LPTIM_Counter_Start_IT(&hlptim1);
-    }
+    // Riprende i campionamenti (se lo stream è attivo)
+    DUST_Acq_Resume();
 
 }
 
@@ -237,7 +231,7 @@ void SD_Stop_Session(void)
     if (!g_file_is_open) return;
 
     // Ferma ADC per chiudere pulito
-    HAL_LPTIM_Counter_Stop_IT(&hlptim1);
+    DUST_Acq_Pause(); // i tick continuano a contare i canali, ma nessun campione usa SPI3
     HAL_SPI_Abort(&hspi3);
     HAL_GPIO_WritePin(GPIOB, DT_CS_Pin, GPIO_PIN_SET);
 
@@ -261,11 +255,8 @@ void SD_Stop_Session(void)
     __HAL_SPI_CLEAR_OVRFLAG(&hspi3);
     HAL_GPIO_WritePin(GPIOB, DT_CS_Pin, GPIO_PIN_RESET);
 
-    // Riavvia Timer Acquisizione
-    if (g_usb_dust_stream_enabled || g_ble_dust_stream_enabled)
-    {
-        HAL_LPTIM_Counter_Start_IT(&hlptim1);
-    }
+    // Riprende i campionamenti (se lo stream è attivo)
+    DUST_Acq_Resume();
 }
 
 void SD_Write_Buffer(uint8_t *pData, uint32_t length)
@@ -273,7 +264,7 @@ void SD_Write_Buffer(uint8_t *pData, uint32_t length)
     // =================================================================
     // 1. STOP & SAVE CONTEXT
     // =================================================================
-    HAL_LPTIM_Counter_Stop_IT(&hlptim1);
+    DUST_Acq_Pause(); // i tick continuano a contare i canali, ma nessun campione usa SPI3
 
     // Abort per pulire il bus SPI e il DMA da eventuali residui ADC
     HAL_SPI_Abort(&hspi3);
@@ -359,11 +350,8 @@ void SD_Write_Buffer(uint8_t *pData, uint32_t length)
     // Ripristina CS ADC basso (Pronto per acquisizione)
     HAL_GPIO_WritePin(GPIOB, DT_CS_Pin, GPIO_PIN_RESET);
 
-    // Riavvia Timer Acquisizione
-    if (g_usb_dust_stream_enabled || g_ble_dust_stream_enabled)
-    {
-        HAL_LPTIM_Counter_Start_IT(&hlptim1);
-    }
+    // Riprende i campionamenti (se lo stream è attivo)
+    DUST_Acq_Resume();
 }
 /* USER CODE END 0 */
 
@@ -396,7 +384,9 @@ int main(void)
   PeriphCommonClock_Config();
 
   /* USER CODE BEGIN SysInit */
-
+  // Tutte le temporizzazioni (TIM1, TIM2, SPI3, ADC4) sono calcolate per 96 MHz: se CubeMX ha
+  // rigenerato SystemClock_Config() a 32 MHz (HSE), qui il sistema torna sul PLL
+  DUST_SystemClock_Ensure96MHz();
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
@@ -586,7 +576,14 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.LSEState = RCC_LSE_ON;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-  RCC_OscInitStruct.PLL1.PLLState = RCC_PLL_NONE;
+  RCC_OscInitStruct.PLL1.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL1.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL1.PLLM = 2;
+  RCC_OscInitStruct.PLL1.PLLN = 12;
+  RCC_OscInitStruct.PLL1.PLLP = 2;
+  RCC_OscInitStruct.PLL1.PLLQ = 2;
+  RCC_OscInitStruct.PLL1.PLLR = 2;
+  RCC_OscInitStruct.PLL1.PLLFractional = 0;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -597,15 +594,15 @@ void SystemClock_Config(void)
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2
                               |RCC_CLOCKTYPE_PCLK7|RCC_CLOCKTYPE_HCLK5;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSE;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
   RCC_ClkInitStruct.APB7CLKDivider = RCC_HCLK_DIV1;
-  RCC_ClkInitStruct.AHB5_PLL1_CLKDivider = RCC_SYSCLK_PLL1_DIV1;
+  RCC_ClkInitStruct.AHB5_PLL1_CLKDivider = RCC_SYSCLK_PLL1_DIV3;
   RCC_ClkInitStruct.AHB5_HSEHSI_CLKDivider = RCC_SYSCLK_HSEHSI_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
   {
     Error_Handler();
   }
@@ -661,7 +658,7 @@ void MX_ADC4_Init(void)
   */
   hadc4.Instance = ADC4;
   hadc4.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV16;
-  hadc4.Init.Resolution = ADC_RESOLUTION_8B;
+  hadc4.Init.Resolution = ADC_RESOLUTION_12B;
   hadc4.Init.DataAlign = ADC_DATAALIGN_RIGHT;
   hadc4.Init.ScanConvMode = ADC_SCAN_ENABLE;
   hadc4.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
@@ -1247,18 +1244,18 @@ void MX_GPIO_Init(void)
   __HAL_RCC_GPIOC_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, DT_CS_Pin|RES_DCC_Pin|DCC_Sel_Pin|OUT_D_Pin
-                          |Hfb1_Pin|Enable_Sensor_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, DT_CS_Pin|RES_DCC_Pin|DCC_Sel_Pin|Hfb1_Pin
+                          |SEL_Pin|Enable_Sensor_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(SD_CS_GPIO_Port, SD_CS_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, S1_Pin|S2_Pin|S3_Pin|S4_Pin
-                          |RES_ch_read_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, S1_Pin|S2_Pin|S3_Pin|Hfb2_Pin
+                          |S4_Pin|RES_ch_read_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pins : DT_CS_Pin OUT_D_Pin Enable_Sensor_Pin */
-  GPIO_InitStruct.Pin = DT_CS_Pin|OUT_D_Pin|Enable_Sensor_Pin;
+  /*Configure GPIO pins : DT_CS_Pin Enable_Sensor_Pin */
+  GPIO_InitStruct.Pin = DT_CS_Pin|Enable_Sensor_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -1290,31 +1287,31 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   HAL_GPIO_Init(DCC_Counter_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : RES_DCC_Pin DCC_Sel_Pin */
-  GPIO_InitStruct.Pin = RES_DCC_Pin|DCC_Sel_Pin;
+  /*Configure GPIO pins : RES_DCC_Pin DCC_Sel_Pin SEL_Pin */
+  GPIO_InitStruct.Pin = RES_DCC_Pin|DCC_Sel_Pin|SEL_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : Hfb2_Pin */
-  GPIO_InitStruct.Pin = Hfb2_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
-  HAL_GPIO_Init(Hfb2_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : RES_ch_read_Pin */
-  GPIO_InitStruct.Pin = RES_ch_read_Pin;
+  /*Configure GPIO pins : Hfb2_Pin RES_ch_read_Pin */
+  GPIO_InitStruct.Pin = Hfb2_Pin|RES_ch_read_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(RES_ch_read_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : SEL_Pin SD_DETECT_Pin */
-  GPIO_InitStruct.Pin = SEL_Pin|SD_DETECT_Pin;
+  /*Configure GPIO pin : OUT_D_Pin */
+  GPIO_InitStruct.Pin = OUT_D_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  HAL_GPIO_Init(OUT_D_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : SD_DETECT_Pin */
+  GPIO_InitStruct.Pin = SD_DETECT_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  HAL_GPIO_Init(SD_DETECT_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -1322,7 +1319,60 @@ void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+// Copia della configurazione a 96 MHz di SystemClock_Config(), fuori dal codice generato:
+// CubeIDE a volte riporta il clock dell'IOC a HSE 32 MHz quando lo si modifica
+static void DUST_SystemClock_Ensure96MHz(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
+  if (HAL_RCC_GetSysClockFreq() == 96000000UL)
+  {
+    return;
+  }
+
+  if (HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  // PLL1 da HSE 32 MHz: 32 / M(2) * N(12) / R(2) = 96 MHz
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_NONE;
+  RCC_OscInitStruct.PLL1.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL1.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL1.PLLM = 2;
+  RCC_OscInitStruct.PLL1.PLLN = 12;
+  RCC_OscInitStruct.PLL1.PLLP = 2;
+  RCC_OscInitStruct.PLL1.PLLQ = 2;
+  RCC_OscInitStruct.PLL1.PLLR = 2;
+  RCC_OscInitStruct.PLL1.PLLFractional = 0;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  // AHB5 (radio) deve restare a 32 MHz: 96 / 3
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2
+                              |RCC_CLOCKTYPE_PCLK7|RCC_CLOCKTYPE_HCLK5;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB7CLKDivider = RCC_HCLK_DIV1;
+  RCC_ClkInitStruct.AHB5_PLL1_CLKDivider = RCC_SYSCLK_PLL1_DIV3;
+  RCC_ClkInitStruct.AHB5_HSEHSI_CLKDivider = RCC_SYSCLK_HSEHSI_DIV1;
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  HAL_SYSTICK_CLKSourceConfig(SYSTICK_CLKSOURCE_LSE);
+  if (HAL_InitTick(TICK_INT_PRIORITY) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
 /* USER CODE END 4 */
 
 /**

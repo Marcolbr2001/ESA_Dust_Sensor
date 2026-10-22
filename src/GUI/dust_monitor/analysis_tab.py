@@ -84,12 +84,13 @@ def _parse_bin_file(filename):
 
 # --- PARSER HEX TEXT (.txt) ---
 # Frame BLE (DUST_BuildFrame nel firmware): AA 55 + 32 canali + 0D 0A
-#   v6: [PARTICLES][SPI_MSB][SPI_LSB][ADC_POS][ADC_NEG] per canale -> 164 byte
-#   v5: [PARTICLES][SPI_MSB][SPI_LSB]                   per canale -> 100 byte
-_TXT_FRAME_LAYOUTS = ((5, 164), (3, 100))  # (byte per canale, lunghezza frame)
+#   v7: [PARTICLES][SPI_MSB][SPI_LSB][POS_MSB][POS_LSB][NEG_MSB][NEG_LSB] per canale -> 228 byte
+#   v6: [PARTICLES][SPI_MSB][SPI_LSB][ADC_POS][ADC_NEG]                   per canale -> 164 byte
+#   v5: [PARTICLES][SPI_MSB][SPI_LSB]                                     per canale -> 100 byte
+_TXT_FRAME_LAYOUTS = ((7, 228), (5, 164), (3, 100))  # (byte per canale, lunghezza frame)
 
 def _txt_frame_stride(tokens, start):
-    """Byte per canale del frame che inizia in 'start' (5 = v6, 3 = v5), None se il
+    """Byte per canale del frame che inizia in 'start' (7 = v7, 5 = v6, 3 = v5), None se il
     terminatore 0D 0A non è dove dovrebbe (frame troncato o falso sync nel payload)."""
     for stride, frame_len in _TXT_FRAME_LAYOUTS:
         end = start + frame_len
@@ -99,7 +100,7 @@ def _txt_frame_stride(tokens, start):
 
 def _parse_hex_txt_log(filename):
     """
-    Legge file TXT. Cerca 'AA 55' e riconosce il layout del frame (v6 o v5).
+    Legge file TXT. Cerca 'AA 55' e riconosce il layout del frame (v7, v6 o v5).
     Converte MSB+LSB in Signed 16-bit e poi in Absolute Value.
     """
     data = {i: {'times': [], 'values': []} for i in range(1, 33)}

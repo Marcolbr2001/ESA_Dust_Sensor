@@ -231,14 +231,8 @@ void BLE_SENSOR_APP_Init(void)
   // timer periodico da 1000 ms
   UTIL_TIMER_Create(&MYDATA_Timer_Id, 1000, UTIL_TIMER_PERIODIC, &MYDATA_TimerCb, 0);
 
-  // registra la task che invia il pacchetto
+  // registra la task che invia il pacchetto (i campioni li elaborano gli interrupt dell'acquisizione)
   UTIL_SEQ_RegTask(1U << CFG_TASK_MYDATA_UPDATE_ID, UTIL_SEQ_RFU, MYDATA_Update);
-
-  // registra la task di elaborazione dei campioni (lanciata da HAL_ADC_ConvCpltCallback).
-  // Senza registrazione il sequencer scarta la richiesta, g_processing_lock non viene
-  // mai rilasciato e l'acquisizione si ferma dopo il primo campione
-  UTIL_SEQ_RegTask(1U << CFG_TASK_DUST_PROCESS_ID, UTIL_SEQ_RFU, DUST_Process_ADC_Task);
-
   /* USER CODE END Service1_APP_Init */
   return;
 }
@@ -347,7 +341,7 @@ static void MYDATA_Update(void)
       return;
   }
 
-  // BLE_SENSOR_Data_t.Length è uint8_t, ma il frame è ~136 byte, quindi ok (<255)
+  // BLE_SENSOR_Data_t.Length è uint8_t, ma il frame è DUST_FRAME_LEN = 228 byte, quindi ok (<255)
   pkt.Length = (uint8_t)len;
 
   // Invia notifica sulla caratteristica MYDATA

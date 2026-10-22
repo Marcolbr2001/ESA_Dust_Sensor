@@ -38,6 +38,12 @@ class TimeSeriesGraph(tk.Canvas):
     N_TICKS = 3          # etichette asse Y (min, metà, max)
     GRID_X = 4           # linee verticali
     INTEGER_TICKS = False
+    # OUT_P/OUT_N: codici a 12 bit dell'ADC4 (riferimento VDDA) su un loro asse a destra, in mV attorno
+    # alla mediana di ciascuna traccia: i due livelli distano centinaia di mV e su un asse comune in volt
+    # il loro rumore (pochi mV) sarebbe una linea piatta. I valori assoluti sono nelle etichette P/N
+    ADC4_VREF = 3.3
+    ADC4_CODES = 4096
+    ADC4_MIN_SPAN = 4    # codici sopra e sotto la mediana: l'asse destro non zooma oltre (1 codice = 0.8 mV)
 
     def __init__(self, master, max_points=50, y_labels=True, font_size=8, **kwargs):
         colors = theme.plot_colors()
@@ -62,13 +68,18 @@ class TimeSeriesGraph(tk.Canvas):
         self._dirty = True
         self._geom_dirty = True
         self._range = None             # (lo, hi) attuale dell'asse Y
+        self._rhalf = None             # semiampiezza in mV dell'asse destro (OUT_P/OUT_N), simmetrico su 0
         self._tick_key = None          # ultimo contenuto delle etichette
+        self._rtick_key = None
+        self._rlabel_w = None
         self._layout = None            # (left, top, pw, ph, labels_visibili)
 
         self._grid_v = [self.create_line(0, 0, 0, 0, state="hidden") for _ in range(self.GRID_X)]
         self._grid_h = [self.create_line(0, 0, 0, 0, state="hidden") for _ in range(self.N_TICKS)]
         self._ticks = [self.create_text(0, 0, anchor="e", font=self._font, state="hidden")
                        for _ in range(self.N_TICKS)]
+        self._rticks = [self.create_text(0, 0, anchor="w", font=self._font, state="hidden")
+                        for _ in range(self.N_TICKS)]
         self._adc_pos = self.create_line(0, 0, 0, 0, width=1, state="hidden")
         self._adc_neg = self.create_line(0, 0, 0, 0, width=1, dash=(3, 2), state="hidden")
         self._adc_pos_txt = self.create_text(0, 0, anchor="ne", font=self._font, state="hidden")
@@ -81,10 +92,11 @@ class TimeSeriesGraph(tk.Canvas):
     # ------------------------------------------------------------------ dati
 
     def push(self, value, adc_pos=None, adc_neg=None):
-        """Accoda un campione (nessun disegno: lo fa render())."""
+        """Accoda un campione (nessun disegno: lo fa render()). OUT_P/OUT_N mancanti restano None,
+        così non portano l'asse destro a 0 V (es. storia del canale, che non ha i valori dell'ADC4)."""
         self.values.append(value)
-        self.adc_pos_values.append(adc_pos if adc_pos is not None else 0)
-        self.adc_neg_values.append(adc_neg if adc_neg is not None else 0)
+        self.adc_pos_values.append(adc_pos)
+        self.adc_neg_values.append(adc_neg)
         self._dirty = True
 
     def add_value(self, value, adc_pos=None, adc_neg=None):
@@ -95,6 +107,7 @@ class TimeSeriesGraph(tk.Canvas):
         self.adc_pos_values.clear()
         self.adc_neg_values.clear()
         self._range = None
+        self._rhalf = None
         self._dirty = True
 
     # ------------------------------------------------------------------ stato
@@ -106,6 +119,9 @@ class TimeSeriesGraph(tk.Canvas):
 
     def set_show_adcs(self, state: bool):
         self.show_adcs = state
+        self._rhalf = None
+        self._rtick_key = None
+        self._geom_dirty = True        # l'asse destro toglie spazio all'area del grafico
         self._dirty = True
 
     def set_display_mode(self, mode: str):
@@ -132,7 +148,7 @@ class TimeSeriesGraph(tk.Canvas):
         text = c["text"] if self.is_active else c["dim"]
         for item in self._grid_v + self._grid_h:
             self.itemconfigure(item, fill=c["grid"])
-        for item in self._ticks:
+        for item in self._ticks + self._rticks:
             self.itemconfigure(item, fill=text)
         self.itemconfigure(self._line, fill=line)
         self.itemconfigure(self._adc_pos, fill=c["adc_pos"] if self.is_active else c["dim"])
@@ -175,14 +191,39 @@ class TimeSeriesGraph(tk.Canvas):
         self._range = (lo, hi)
         return self._range
 
+    def _rlabel_width(self):
+        if self._rlabel_w is None:
+            self._rlabel_w = tkfont.Font(font=self._font).measure("-888mV")
+        return self._rlabel_w
+
+    @staticmethod
+    def _format_mv(val):
+        if abs(val) < 1e-9:
+            return "0"
+        if abs(val) >= 1000:
+            return f"{val / 1000:+g}V"
+        return f"{val:+g}mV"
+
+    def _scale_adc(self, max_dev):
+        """Semiampiezza 'tonda' in mV dell'asse destro (simmetrico, 0 = mediana di ogni traccia), unica
+        per OUT_P e OUT_N così le loro escursioni si confrontano: isteresi come l'asse sinistro, ma mai
+        sotto ADC4_MIN_SPAN codici."""
+        half = self._rhalf
+        if half is not None and 0.25 * half <= max_dev <= half:
+            return half
+        min_half = self.ADC4_MIN_SPAN * 1000.0 * self.ADC4_VREF / self.ADC4_CODES
+        self._rhalf = _nice_step(max(max_dev, min_half) * 1.1)
+        return self._rhalf
+
     # ------------------------------------------------------------------ disegno
 
     def _compute_layout(self, w, h):
         s = theme.widget_scaling(self)
         labels = self.y_labels and w >= 90 * s   # anteprime molto strette: solo la traccia
         left = self._label_width() + 8 * s if labels else 3 * s
+        right = self._rlabel_width() + 8 * s if (labels and self.show_adcs) else 3 * s
         top = 6 * s
-        return left, top, max(1.0, w - left - 3 * s), max(1.0, h - top - 6 * s), labels
+        return left, top, max(1.0, w - left - right), max(1.0, h - top - 6 * s), labels
 
     def _place_grid(self, w, h):
         left, top, pw, ph, labels = self._layout
@@ -199,6 +240,8 @@ class TimeSeriesGraph(tk.Canvas):
             self.coords(item, left - 5, y)
             self.itemconfigure(item, state="normal" if labels else "hidden")
         s = theme.widget_scaling(self)
+        for i, item in enumerate(self._rticks):  # visibilità decisa in render(): servono i dati dell'ADC4
+            self.coords(item, left + pw + 5 * s, top + ph * i / (self.N_TICKS - 1))
         self.coords(self._adc_pos_txt, left + pw - 2 * s, top + 1 * s)
         self.coords(self._adc_neg_txt, left + pw - 2 * s, top + 13 * s)
 
@@ -216,6 +259,25 @@ class TimeSeriesGraph(tk.Canvas):
             v = lo if v < lo else hi if v > hi else v
             pts.append(x)
             pts.append(top + ph * (1.0 - (v - lo) / span))
+        return pts
+
+    def _adc_points(self, codes, base, half, left, top, pw, ph):
+        """Codici dell'ADC4 come linea a gradini sull'asse destro (scostamento in mV dal codice 'base',
+        su +-half): sono quantizzati, una linea obliqua tra due codici mostrerebbe valori mai misurati.
+        I campioni None si saltano."""
+        k = 1000.0 * self.ADC4_VREF / self.ADC4_CODES
+        xs = self._x_positions(len(codes), left, pw)
+        pts = []
+        prev_y = None
+        for x, code in zip(xs, codes):
+            if code is None:
+                continue
+            d = min(max((code - base) * k, -half), half)
+            y = top + ph * (0.5 - d / (2 * half))
+            if prev_y is not None and y != prev_y:
+                pts.extend((x, prev_y))
+            pts.extend((x, y))
+            prev_y = y
         return pts
 
     def render(self, force=False):
@@ -237,7 +299,7 @@ class TimeSeriesGraph(tk.Canvas):
 
         data = self.values
         if len(data) < 2:
-            for item in (self._line, self._adc_pos, self._adc_neg, self._adc_pos_txt, self._adc_neg_txt):
+            for item in (self._line, self._adc_pos, self._adc_neg, self._adc_pos_txt, self._adc_neg_txt, *self._rticks):
                 self.itemconfigure(item, state="hidden")
             return
 
@@ -252,17 +314,47 @@ class TimeSeriesGraph(tk.Canvas):
         self.coords(self._line, *self._line_points(data, lo, hi, left, top, pw, ph))
         self.itemconfigure(self._line, state="normal")
 
-        if self.show_adcs:
-            self.coords(self._adc_pos, *self._line_points(self.adc_pos_values, 0, 255, left, top, pw, ph))
-            self.coords(self._adc_neg, *self._line_points(self.adc_neg_values, 0, 255, left, top, pw, ph))
-            self.itemconfigure(self._adc_pos_txt, text=f"+{self.adc_pos_values[-1]}")
-            self.itemconfigure(self._adc_neg_txt, text=f"−{self.adc_neg_values[-1]}")
-            for item in (self._adc_pos, self._adc_neg, self._adc_pos_txt, self._adc_neg_txt):
-                self.itemconfigure(item, state="normal")
-            self.tag_raise(self._line)
-        else:
-            for item in (self._adc_pos, self._adc_neg, self._adc_pos_txt, self._adc_neg_txt):
+        self._render_adcs(labels, left, top, pw, ph)
+
+    def _render_adcs(self, labels, left, top, pw, ph):
+        """OUT_P (continua) e OUT_N (tratteggiata) sul loro asse a destra, come scostamento in mV dalla
+        mediana di ciascuna nella finestra (una particella non la sposta): la scala della traccia blu
+        (ADS8867, 16 bit, ~0.1 mV) non vale per loro (ADC4, 12 bit, 0.8 mV)."""
+        traces = []
+        for line, txt, name, codes in ((self._adc_pos, self._adc_pos_txt, "P", self.adc_pos_values),
+                                       (self._adc_neg, self._adc_neg_txt, "N", self.adc_neg_values)):
+            valid = sorted(c for c in codes if c is not None)
+            traces.append((line, txt, name, codes, valid[len(valid) // 2] if valid else None, valid))
+        if not (self.show_adcs and any(t[4] is not None for t in traces)):
+            for item in (self._adc_pos, self._adc_neg, self._adc_pos_txt, self._adc_neg_txt, *self._rticks):
                 self.itemconfigure(item, state="hidden")
+            return
+
+        k = 1000.0 * self.ADC4_VREF / self.ADC4_CODES
+        max_dev = max(max(base - valid[0], valid[-1] - base) * k
+                      for _, _, _, _, base, valid in traces if base is not None)
+        half = self._scale_adc(max_dev)
+        if labels and half != self._rtick_key:
+            n = self.N_TICKS - 1
+            for i, item in enumerate(self._rticks):
+                self.itemconfigure(item, text=self._format_mv(half - 2 * half * i / n))
+            self._rtick_key = half
+        for item in self._rticks:
+            self.itemconfigure(item, state="normal" if labels else "hidden")
+
+        for line, txt, name, codes, base, _ in traces:
+            pts = self._adc_points(codes, base, half, left, top, pw, ph) if base is not None else []
+            if len(pts) >= 4:
+                self.coords(line, *pts)
+                self.itemconfigure(line, state="normal")
+            else:
+                self.itemconfigure(line, state="hidden")
+            last = next((c for c in reversed(codes) if c is not None), None)
+            if last is None:
+                self.itemconfigure(txt, state="hidden")
+            else:
+                self.itemconfigure(txt, text=f"{name} {last * k / 1000:.3f}V", state="normal")
+        self.tag_raise(self._line)
 
 
 # -------------------------------------------------------------------------

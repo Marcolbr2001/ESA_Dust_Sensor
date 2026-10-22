@@ -88,23 +88,47 @@ uint8_t  g_dust_trig_step = 6u;      // Corrisponde a 3 in GUI
 uint8_t  g_dust_rec_ratio_pct = 18u; // Corrisponde a 0.18 in GUI
 
 
-// --- VARIABILI PONTE PER IL TASK ---
-volatile uint16_t pending_spi_val = 0;
-volatile uint8_t  pending_ch_idx = 0;
-
-// Variabile globale per tenere traccia di quale canale stiamo leggendo
-volatile uint8_t adc_read_step = 0;
-
 // Array per il DMA dell'ADC4 (GPDMA1 canale 5 a half-word con destinazione incrementata):
 // [0] = Rank 1 = ADC4_IN8 = PA1 = OUT_N, [1] = Rank 2 = ADC4_IN4 = PA5 = OUT_P
 volatile uint16_t adc_dma_buf[2];
 
-// Watchdog della catena LPTIM -> TIM1 -> SPI -> ADC -> task: se una callback si perde
+// --- BASE TEMPI DELL'ACQUISIZIONE (TIM2) ---
+// TIM2 genera S0ck su PA7 (CH3, PWM al 50%): in Auto ogni fronte di salita (CNT = 0) fa avanzare il
+// contatore canali del sensore. Il campionamento parte dal compare CH4 dello stesso timer, quindi
+// resta sempre allineato al contatore e cade lontano da entrambi i cambi canale
+#define DUST_TIM2_PSC            95u   // 96 MHz / 96 = 1 MHz (1 tick = 1 us)
+#define DUST_PWM_FREQ_MAX_KHZ    5u    // dopo il campione la catena dura ~50 us e serve metà periodo libera
+
+// Istante di campionamento, in % del periodo dopo il fronte di salita di S0ck (comando 'P').
+// 50% = a metà tra due fronti di salita, il più lontano possibile dai cambi canale se il contatore
+// del sensore avanza sul fronte di salita. Se i dati in Auto risultano disturbati, il contatore
+// avanza sull'altro fronte: provare 'P25' o 'P75'
+static uint8_t g_sample_phase_pct = 50u;
+
+// Priorità degli interrupt dell'acquisizione: TIM2/TIM1 = 4, SPI3/GPDMA/ADC4 = 5. BASEPRI con questo
+// valore li blocca tutti senza toccare la radio (priorità 0)
+#define DUST_ACQ_IRQ_BASEPRI     (4u << 4)
+
+static volatile uint8_t  g_acq_sampling = 0;  // tick di campionamento abilitati (stream avviato)
+static volatile uint8_t  g_acq_paused = 0;    // SPI3 usata dalla SD: i tick contano i canali ma non campionano
+static volatile uint8_t  s_round_done = 0;    // giro dei 32 canali chiuso dal tick precedente
+static volatile uint8_t  s_sample_ch = 0;     // canale del campione in corso, fissato al tick
+static volatile uint16_t s_sample_spi = 0;    // valore dell'ADS8867 del campione in corso
+static volatile uint8_t  s_sample_spi_ok = 0; // il valore dell'ADS8867 è arrivato
+
+// Letture del campione in corso non ancora arrivate: l'ADS8867 (SPI) e l'ADC4 (DMA) partono
+// entrambi al tick e finiscono in callback separate, il campione si chiude con l'ultima
+#define DUST_SAMPLE_WAIT_SPI     0x01u
+#define DUST_SAMPLE_WAIT_ADC     0x02u
+static volatile uint8_t  s_sample_wait = 0;
+
+// Watchdog della catena TIM2 -> TIM1 -> SPI -> ADC: se una callback si perde
 // il semaforo resterebbe chiuso per sempre e lo stream si fermerebbe senza errori
-#define DUST_LOCK_TIMEOUT_TICKS  133u  // periodi LPTIM1 (~100 ms a 1.33 kHz)
-static uint8_t g_lock_wait_ticks = 0;
+#define DUST_LOCK_TIMEOUT_TICKS  400u  // periodi di S0ck (~100 ms a 4 kHz)
+static uint16_t g_lock_wait_ticks = 0;
 volatile uint32_t g_lock_recovery_count = 0; // da guardare nel debugger: se cresce, una callback si perde
 volatile uint32_t g_adc_error_count = 0;     // overrun / errori DMA dell'ADC4
+volatile uint32_t g_skipped_ticks = 0;       // campioni saltati perché il precedente non era ancora finito
 
 // -------------------- strutture dati per canali ------ //
 typedef enum
@@ -150,8 +174,8 @@ typedef struct
 	uint16_t peak_val;
 	int8_t   step_dir;
 
-	uint8_t last_adc_pos; // Valore letto da PA5 = OUT_P (ADC4_IN4, Rank 2)
-	uint8_t last_adc_neg; // Valore letto da PA1 = OUT_N (ADC4_IN8, Rank 1)
+	uint16_t last_adc_pos; // Valore a 12 bit letto da PA5 = OUT_P (ADC4_IN4, Rank 2)
+	uint16_t last_adc_neg; // Valore a 12 bit letto da PA1 = OUT_N (ADC4_IN8, Rank 1)
 
 } DustChannelState_t;
 
@@ -162,7 +186,14 @@ static DustEventCallback_t  g_dust_cb = NULL;   // callback utente
 static uint8_t              next_ch = 0u;
 static uint8_t  			sending_round   = 0u;
 
-static uint8_t uart_frame[2 + DUST_CHANNELS * 5 + 2]; // header + 32*(sync+ch+count+2B) + "\r\n"
+static uint8_t uart_frame[DUST_FRAME_LEN]; // header + 32*(count + SPI 2B + OUT_P 2B + OUT_N 2B) + "\r\n"
+static uint8_t sd_frame[2 + DUST_CHANNELS * 2 + 2];   // frame per la SD: separato, la UART può essere ancora in DMA
+
+static inline void CHANNEL_SET(uint8_t channel);
+static void DUST_Sample_PartDone(uint8_t part);
+static void DUST_Acq_Stop(void);
+static void DUST_Acq_WaitIdle(void);
+static void DUST_Acq_Reconfigure(void);
 
 
 // ---------------------------------------------- //
@@ -232,74 +263,42 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 
 		case 'A':
 
-				HAL_LPTIM_Counter_Stop_IT(&hlptim1);
+				DUST_Acq_Stop();
 				g_ble_dust_stream_enabled = 0;
 				g_usb_dust_stream_enabled = 0;
+				DUST_Acq_WaitIdle(); // la lettura singola usa SPI3: aspetta l'ultimo campione dello stream
 				GET_ADC_VALUES();
 			break;
 
 		// ------ Serial or Bluetooth Communication ------ //
 		case 'C':
 
-				HAL_LPTIM_Counter_Start_IT(&hlptim1);
-
 				if (len >= 2 && data_received[1] == 'b')
 				{
 					g_ble_dust_stream_enabled = 1;
 					g_usb_dust_stream_enabled = 0;
-
-					//If we are restarting an automatic iteration, reset the channel read to begin from channel 1
-					if(dcc_sel_ck == 0)
-					{
-						HAL_GPIO_WritePin(DCC_Sel_GPIO_Port, DCC_Sel_Pin, GPIO_PIN_RESET); //Automatic channel selection and iteration
-						Config_PA7_As_PWM();
-						HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_SET); // Reset canale corrente a 0
-						HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_RESET); // Il segnale reset torna basso
-						next_ch = 0u;
-					}
-					else
-					{
-						HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_SET); // Reset conattore canale, ma 1 significa anche spegnimento del clock automatico del counter
-						HAL_GPIO_WritePin(DCC_Sel_GPIO_Port, DCC_Sel_Pin, GPIO_PIN_SET); //Manual Channel selection and iteration
-						Config_PA7_As_GPIO();
-						next_ch = 0u;
-						g_manual_channel = 0;
-					}
-
 				}
 				else //use "Cu" for USB
 				{
 					g_ble_dust_stream_enabled = 0;
 					g_usb_dust_stream_enabled = 1;
 				}
-				//GET_ADC_VALUES_continous();
+
+				// Riparte sempre dal canale 1, con contatore del sensore, indice software e tick allineati.
+				// In manuale resta il canale scelto dalla GUI (comando 'N')
+				g_acq_sampling = 1;
+				DUST_Acq_Reconfigure();
 
 			break;
 
 		// ------ Only Bluetooth communication ------ //
 		case 'B':
-				HAL_LPTIM_Counter_Start_IT(&hlptim1);
 
 				g_ble_dust_stream_enabled = 1;
 				g_usb_dust_stream_enabled = 0;
 
-				//If we are restarting an automatic iteration, reset the channel read to begin from channel 1
-				if(dcc_sel_ck == 0)
-				{
-					HAL_GPIO_WritePin(DCC_Sel_GPIO_Port, DCC_Sel_Pin, GPIO_PIN_RESET); //Automatic channel selection and iteration
-					Config_PA7_As_PWM();
-					HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_SET); // Reset canale corrente a 0
-					HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_RESET); // Il segnale reset torna basso
-					next_ch = 0u;
-				}
-				else
-				{
-					HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_SET); // Reset conattore canale, ma 1 significa anche spegnimento del clock automatico del counter
-					HAL_GPIO_WritePin(DCC_Sel_GPIO_Port, DCC_Sel_Pin, GPIO_PIN_SET); //Manual Channel selection and iteration
-					Config_PA7_As_GPIO();
-					next_ch = 0u;
-					g_manual_channel = 0;
-				}
+				g_acq_sampling = 1;
+				DUST_Acq_Reconfigure();
 
 			break;
 
@@ -351,22 +350,23 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 			break;
 
 		// ------ Dust Clock Frequency selection ------ //
+		// A0 = Hfb2 (PA15), A1 = Hfb1 (PB2): su REV-B Hfb2 non è più su PB1 (ora SEL)
 		case 'K':
 
 			if (len >= 2 && data_received[1] == '5') //50kHz
 			{
-				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET); //A0 = 0
-				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_RESET); //A1 = 0
+				HAL_GPIO_WritePin(Hfb2_GPIO_Port, Hfb2_Pin, GPIO_PIN_RESET); //A0 = 0
+				HAL_GPIO_WritePin(Hfb1_GPIO_Port, Hfb1_Pin, GPIO_PIN_RESET); //A1 = 0
 			}
 			else if(len >= 2 && data_received[1] == '4') //400kHz
 			{
-				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET); //A0 = 0
-				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_SET); //A1 = 1
+				HAL_GPIO_WritePin(Hfb2_GPIO_Port, Hfb2_Pin, GPIO_PIN_RESET); //A0 = 0
+				HAL_GPIO_WritePin(Hfb1_GPIO_Port, Hfb1_Pin, GPIO_PIN_SET); //A1 = 1
 			}
 			else //200kHz
 			{
-				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_SET); //A0 = 1
-				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_RESET); //A1 = 0
+				HAL_GPIO_WritePin(Hfb2_GPIO_Port, Hfb2_Pin, GPIO_PIN_SET); //A0 = 1
+				HAL_GPIO_WritePin(Hfb1_GPIO_Port, Hfb1_Pin, GPIO_PIN_RESET); //A1 = 0
 			}
 			break;
 
@@ -375,22 +375,15 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 
 			if(len >= 2 && data_received[1] == 'A')
 			{
-				HAL_GPIO_WritePin(DCC_Sel_GPIO_Port, DCC_Sel_Pin, GPIO_PIN_RESET); //Automatic channel selection and iteration
-				Config_PA7_As_PWM();
-				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_SET); // Reset canale corrente a 0
-				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_RESET); // Il segnale reset torna basso
-				next_ch = 0u;
 				dcc_sel_ck = 0; // flag automatic
 			}
 			else
 			{
-				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_SET); // Reset conattore canale, ma 1 significa anche spegnimento del clock automatico del counter
-				HAL_GPIO_WritePin(DCC_Sel_GPIO_Port, DCC_Sel_Pin, GPIO_PIN_SET); //Manual Channel selection and iteration
-				Config_PA7_As_GPIO();
-				next_ch = 0u;
 				g_manual_channel = 0;
 				dcc_sel_ck = 1;	// flag manual
 			}
+			// Applica la modalità (SEL, PA7, reset del contatore) e riallinea i tick al contatore del sensore
+			DUST_Acq_Reconfigure();
 			break;
 
 		// ------ Offset Dust Signal Configuration ------ //
@@ -425,6 +418,7 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 			break;
 
 			// ------ PWM Frequency Configuration (kHz) ------ //
+			// È anche la frequenza di campionamento: S0ck e tick di acquisizione vengono dallo stesso TIM2
 			case 'F':
 				if (len > 1)
 				{
@@ -442,18 +436,18 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 
 					int val_khz = atoi(tmp);
 
-					// Sicurezza: Limito la frequenza tra 1 kHz e 500 kHz
-					if (val_khz >= 1 && val_khz <= 500)
+					// Sicurezza: la catena di acquisizione deve finire entro metà periodo
+					if (val_khz >= 1 && val_khz <= (int)DUST_PWM_FREQ_MAX_KHZ)
 					{
 						g_pwm_freq_khz = val_khz;
 						g_pwm_arr = (1000 / g_pwm_freq_khz) - 1;
 						g_pwm_pulse = (g_pwm_arr + 1) / 2; // Mantiene il duty cycle al 50%
 
-						// Se siamo già in modalità automatica, aggiorna i registri del timer al volo
-						if (dcc_sel_ck == 0)
+						// Se TIM2 sta già girando riparte con il nuovo periodo: cambiare ARR al volo può
+						// mandare il contatore (32 bit) oltre il nuovo valore e fermare S0ck per minuti
+						if ((htim2.Instance->CR1 & TIM_CR1_CEN) != 0u)
 						{
-							__HAL_TIM_SET_AUTORELOAD(&htim2, g_pwm_arr);
-							__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, g_pwm_pulse);
+							DUST_Acq_Reconfigure();
 						}
 					}
 				}
@@ -492,8 +486,12 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 					break;
 
 			case 'R':
+				{
+					// Gli stati dei canali li aggiorna l'interrupt dell'ADC4: niente campioni durante il reset
+					UTILS_ENTER_LIMITED_CRITICAL_SECTION(DUST_ACQ_IRQ_BASEPRI);
 					DUST_Init();
-
+					UTILS_EXIT_LIMITED_CRITICAL_SECTION();
+				}
 				break;
 
 			// ------ Nome del dispositivo: 'L' + nome (es. "LDUST_6"), salvato nel flash ------ //
@@ -552,9 +550,29 @@ void DATA_RECEIVED(const uint8_t *data_received, uint16_t len)
 					g_dust_rec_ratio_pct = (uint8_t)val;
 				}
 				break;
+			// ------ Istante di campionamento nel periodo di S0ck (% dopo il fronte di salita) ------ //
+			case 'P':
+				if (len > 1) {
+					char tmp[5];
+					uint16_t num_bytes = (len - 1 > 4) ? 4 : len - 1;
+					memcpy(tmp, &data_received[1], num_bytes);
+					tmp[num_bytes] = '\0';
+					int val = atoi(tmp);
+					if (val >= 5 && val <= 95)
+					{
+						g_sample_phase_pct = (uint8_t)val;
+						// Cambiare il compare al volo può saltare un tick e disallineare i canali: si riparte
+						if ((htim2.Instance->CR1 & TIM_CR1_CEN) != 0u)
+						{
+							DUST_Acq_Reconfigure();
+						}
+					}
+				}
+				break;
+
 			// ------ Reset ALL ------ //
 			case '0':
-				HAL_LPTIM_Counter_Stop_IT(&hlptim1);
+				DUST_Acq_Stop();
 				g_ble_dust_stream_enabled = 0;
 				g_usb_dust_stream_enabled = 0;
 
@@ -574,7 +592,7 @@ static inline void CHANNEL_SET_Init(void)
 {
 	//At initialization, all the selection pins are set to 0, so CH0 is
 	//selected. This avoids ESD protection of the sensor pads to be activated.
-	GPIOA->BSRR = 0x00DA0000;
+	GPIOA->BSRR = bsrrA[0];
 }
 
 static inline void CHANNEL_SET(uint8_t channel)
@@ -603,7 +621,6 @@ void GET_ADC_VALUES()
 	//HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET); //Read dust chip values
 	//HAL_GPIO_WritePin(GPIOB, GPIO_PIN_11, GPIO_PIN_RESET); //Do not read SD
 	HAL_StatusTypeDef status;
-	HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_1);
 
 	status = HAL_SPI_TransmitReceive(&hspi3, (uint8_t*)Tx_Command_Buffer, (uint8_t*)Rx_Data_Buffer, transfer_length, 10);
     adc_val = Rx_Data_Buffer[0];
@@ -615,20 +632,26 @@ void GET_ADC_VALUES()
 }
 
 
-void GET_ADC_VALUES_continous()
+HAL_StatusTypeDef GET_ADC_VALUES_continous(void)
 {
 
 	if (hspi3.State != HAL_SPI_STATE_READY)
 	{
-		g_processing_lock = 0; // SPI occupata: saltiamo il campione senza lasciare il semaforo chiuso
-		return;
+		return HAL_BUSY; // SPI occupata: niente valore dell'ADS8867 in questo campione
 	}
 
+	// CONVST alto: il fronte di salita è l'istante in cui l'ADS8867 campiona il canale
+	// (CONVST è rimasto basso dalla lettura precedente)
 	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET); //Read dust chip values
 
 	// Il timer è configurato in One-Pulse Mode, quindi si fermerà da solo.
 	__HAL_TIM_SET_COUNTER(&htim1, 0); // Resetta il contatore
-	HAL_TIM_Base_Start_IT(&htim1);    // Avvia il timer con interrupt
+	if (HAL_TIM_Base_Start_IT(&htim1) != HAL_OK)    // Avvia il timer con interrupt
+	{
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET);
+		return HAL_ERROR; // Attesa di conversione non partita: nessuna lettura SPI arriverà
+	}
+	return HAL_OK;
 
 
 	//HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET); //Read dust chip values
@@ -655,11 +678,10 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
         HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET);
 
         // 3. Avvia la lettura DMA
-        // Se fallisce riporta CS alto per reset
+        // Se fallisce CONVST resta basso, pronto per il fronte di salita del prossimo tick
         if (HAL_SPI_TransmitReceive_DMA(&hspi3, (uint8_t*)Tx_Command_Buffer, (uint8_t*)Rx_Data_Buffer, transfer_length) != HAL_OK)
         {
-            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);
-            g_processing_lock = 0; // Lettura non partita: nessuna callback rilascerà il semaforo
+            DUST_Sample_PartDone(DUST_SAMPLE_WAIT_SPI); // Lettura non partita: nessuna callback arriverà
         }
     }
     //else if (htim->Instance == TIM16)
@@ -675,9 +697,9 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
    // }
 }
 
-// Chiamata dall'ISR LPTIM quando il semaforo resta chiuso oltre DUST_LOCK_TIMEOUT_TICKS
-// (es. SPI annullato da un salvataggio su SD, DMA dell'ADC mai completato):
-// annulla quello che è rimasto in sospeso e riapre la catena di acquisizione
+// Chiamata dal tick quando il semaforo resta chiuso oltre DUST_LOCK_TIMEOUT_TICKS, o da
+// DUST_Acq_WaitIdle() (es. DMA dell'ADC mai completato): annulla quello che è rimasto
+// in sospeso e riapre la catena di acquisizione
 static void DUST_Recover_Acquisition(void)
 {
 	g_lock_recovery_count++;
@@ -688,7 +710,8 @@ static void DUST_Recover_Acquisition(void)
 	{
 		HAL_SPI_Abort(&hspi3);
 	}
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);
+	// CONVST basso: il prossimo tick darà di nuovo il fronte di salita che avvia la conversione
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET);
 
 	// Con il clock ADC4 attivo le attese dentro HAL_ADC_Stop_DMA durano pochi us,
 	// anche qui dove HAL_GetTick() non avanza
@@ -698,40 +721,236 @@ static void DUST_Recover_Acquisition(void)
 		HAL_ADC_Stop_DMA(&hadc4);
 	}
 
+	s_sample_wait = 0u;
 	g_processing_lock = 0;
 }
 
-void HAL_LPTIM_AutoReloadMatchCallback(LPTIM_HandleTypeDef *hlptim)
+// Applica la modalità di lettura dei canali ai pin del sensore (la base tempi la gestisce DUST_Timebase_Restart)
+static void DUST_ApplyChannelMode(void)
 {
-	//HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_1); DEBUG
-	// Se il Sequencer non ha ancora finito il giro precedente, saltiamo il turno!
-	    if (g_processing_lock == 1)
-	    {
-	        // ...a meno che il semaforo non sia chiuso da troppo tempo: callback persa
-	        if (++g_lock_wait_ticks < DUST_LOCK_TIMEOUT_TICKS)
-	        {
-	            return;
-	        }
-	        DUST_Recover_Acquisition();
-	    }
-
-	    g_lock_wait_ticks = 0;
-	    g_processing_lock = 1; // Chiudiamo il semaforo
-
-    // Se la lettura canali è manuale -> Selecting prossimo canale SW e HW --> POI LI METTO INSIEME
-	if(dcc_sel_ck == 1)
+	if (dcc_sel_ck == 0)
 	{
-		//CHANNEL_SET(next_ch);
-		CHANNEL_SET(g_manual_channel);
-		DUST_SetCurrentChannel(g_manual_channel);
+		// Auto: il sensore scorre i 32 canali con il suo contatore, che avanza sui fronti di S0ck
+		HAL_GPIO_WritePin(SEL_GPIO_Port, SEL_Pin, GPIO_PIN_RESET); //Automatic channel selection and iteration
+		Config_PA7_As_PWM();
 	}
 	else
 	{
-		DUST_SetCurrentChannel(next_ch);
-
+		// Manuale: contatore fermo in reset, canale scelto dal firmware su S0..S4
+		HAL_GPIO_WritePin(RES_ch_read_GPIO_Port, RES_ch_read_Pin, GPIO_PIN_SET); // Reset contatore canale, ma 1 significa anche spegnimento del clock automatico del counter
+		HAL_GPIO_WritePin(SEL_GPIO_Port, SEL_Pin, GPIO_PIN_SET); //Manual Channel selection and iteration
+		Config_PA7_As_GPIO();
+		CHANNEL_SET(g_manual_channel);
 	}
-	GET_ADC_VALUES_continous();
+}
 
+// (Ri)avvia TIM2 da zero e riporta il contatore del sensore al canale 0: il primo tick
+// (a metà del primo periodo) legge il canale 0 e da lì l'indice segue il contatore
+static void DUST_Timebase_Restart(void)
+{
+	TIM_TypeDef *tim = htim2.Instance;
+
+	tim->CR1 &= ~TIM_CR1_CEN;
+	__HAL_TIM_DISABLE_IT(&htim2, TIM_IT_CC4);
+
+	tim->PSC  = DUST_TIM2_PSC;
+	tim->ARR  = g_pwm_arr;
+	tim->CCR3 = g_pwm_pulse;
+	tim->CCR4 = ((g_pwm_arr + 1u) * g_sample_phase_pct) / 100u;
+	tim->CNT  = 0u;
+	tim->EGR  = TIM_EGR_UG; // carica subito prescaler e registri in preload
+	__HAL_TIM_CLEAR_FLAG(&htim2, TIM_FLAG_UPDATE | TIM_FLAG_CC3 | TIM_FLAG_CC4);
+
+	// Con CNT = 0 l'uscita PWM è alta, quindi in Auto S0ck sale qui: il reset arriva dopo questo
+	// fronte e il contatore del sensore avanza di nuovo solo al primo overflow di TIM2
+	tim->CCER |= TIM_CCER_CC3E;
+	if (dcc_sel_ck == 0)
+	{
+		HAL_GPIO_WritePin(RES_ch_read_GPIO_Port, RES_ch_read_Pin, GPIO_PIN_SET); // Reset canale corrente a 0
+		HAL_GPIO_WritePin(RES_ch_read_GPIO_Port, RES_ch_read_Pin, GPIO_PIN_RESET); // Il segnale reset torna basso
+	}
+
+	next_ch = 0u;
+	sending_round = 0u;
+	s_round_done = 0u;
+	g_lock_wait_ticks = 0u;
+
+	if (g_acq_sampling != 0u)
+	{
+		__HAL_TIM_ENABLE_IT(&htim2, TIM_IT_CC4);
+	}
+	tim->CR1 |= TIM_CR1_CEN;
+}
+
+// Ferma i tick di campionamento. S0ck continua: in Auto il sensore resta in scansione come prima
+static void DUST_Acq_Stop(void)
+{
+	g_acq_sampling = 0u;
+	__HAL_TIM_DISABLE_IT(&htim2, TIM_IT_CC4);
+}
+
+// Attende la fine del campione in corso (catena TIM1 -> SPI3 -> ADC4, ~50 us); se una callback
+// si è persa libera la catena
+static void DUST_Acq_WaitIdle(void)
+{
+	uint32_t guard = SystemCoreClock / 20000u; // qualche centinaio di us
+
+	while ((g_processing_lock != 0u) && (guard > 0u))
+	{
+		guard--;
+	}
+	if (g_processing_lock != 0u)
+	{
+		DUST_Recover_Acquisition();
+	}
+}
+
+// Riparte da zero con modalità e frequenza correnti (Start, cambio modalità, cambio frequenza)
+static void DUST_Acq_Reconfigure(void)
+{
+	__HAL_TIM_DISABLE_IT(&htim2, TIM_IT_CC4); // niente campioni nuovi durante la riconfigurazione
+	DUST_Acq_WaitIdle();
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET); // CONVST basso: il primo tick darà il fronte di salita
+	DUST_ApplyChannelMode();
+	DUST_Timebase_Restart();
+}
+
+// SPI3 serve alla SD: i tick continuano a contare i canali (il sensore non si ferma) ma non campionano
+void DUST_Acq_Pause(void)
+{
+	g_acq_paused = 1u;
+	DUST_Acq_WaitIdle();
+}
+
+void DUST_Acq_Resume(void)
+{
+	g_acq_paused = 0u;
+}
+
+// Fine di un giro dei 32 canali: frame per la SD a ogni giro, per BLE/UART ogni SENDING_ROUND giri
+static void DUST_Round_Completed(void)
+{
+	sending_round++;
+
+	if ((g_enable_sd_saving == 1) && (g_acq_paused == 0u))
+	{
+		uint16_t RAM_frame_len = DUST_BuildFrame_RAM(sd_frame, sizeof(sd_frame));
+		if (RAM_frame_len > 0)
+			DUST_Save_To_Ram(sd_frame, RAM_frame_len);
+	}
+
+	if (sending_round >= SENDING_ROUND)
+	{
+		sending_round = 0;
+		if ((huart1.gState == HAL_UART_STATE_READY) && (g_usb_dust_stream_enabled == 1))
+		{
+			DUST_SendFrame_UART();
+		}
+		else if (g_ble_dust_stream_enabled == 1)
+		{
+			// Richiama il task che invia fisicamente i dati via Bluetooth
+			UTIL_SEQ_SetTask(1U << CFG_TASK_MYDATA_UPDATE_ID, CFG_SEQ_PRIO_0);
+		}
+	}
+}
+
+// ADC4: OUT_N (Rank 1) e OUT_P (Rank 2) in DMA. Prima il clock (senza clock le scritture sui registri
+// ADC4 vengono ignorate e ADC_Enable() resterebbe bloccato in questa ISR, dove HAL_GetTick() non
+// avanza), poi il regolatore
+static HAL_StatusTypeDef DUST_ADC4_Start(void)
+{
+	__HAL_RCC_ADC4_CLK_ENABLE();
+	if ((hadc4.Instance->CR & ADC_CR_ADVREGEN) == 0)
+	{
+		hadc4.Instance->CR |= ADC_CR_ADVREGEN;
+		// Delay a vuoto veloce per stabilizzare il regolatore (~20us)
+		uint32_t wait_loop = (SystemCoreClock / 1000000UL) * 20;
+		while(wait_loop--) { __NOP(); }
+	}
+	return HAL_ADC_Start_DMA(&hadc4, (uint32_t*)adc_dma_buf, 2);
+}
+
+// Avvia il campione del canale 'ch', se quello precedente è finito. ADS8867 (fronte di CONVST) e
+// ADC4 campionano adesso, nello stesso tick (priorità 4): le loro callback sono a priorità 5 e il
+// link layer BLE può bloccarle per centinaia di us, ma a quel punto i valori sono già stati presi.
+// Avviato dalla callback SPI, l'ADC4 leggeva a volte uno o due canali dopo
+static void DUST_Acq_StartSample(uint8_t ch)
+{
+	if (g_acq_paused != 0u)
+	{
+		return; // SPI3 occupata dalla SD
+	}
+
+	if (g_processing_lock == 1)
+	{
+		g_skipped_ticks++;
+		// ...a meno che il semaforo non sia chiuso da troppo tempo: callback persa
+		if (++g_lock_wait_ticks < DUST_LOCK_TIMEOUT_TICKS)
+		{
+			return;
+		}
+		DUST_Recover_Acquisition();
+	}
+
+	g_lock_wait_ticks = 0;
+	g_processing_lock = 1; // Chiudiamo il semaforo
+
+	if (dcc_sel_ck == 1)
+	{
+		CHANNEL_SET(g_manual_channel);
+	}
+	s_sample_ch = ch;
+	s_sample_spi_ok = 0u;
+	s_sample_wait = DUST_SAMPLE_WAIT_SPI | DUST_SAMPLE_WAIT_ADC;
+	DUST_SetCurrentChannel(ch);
+
+	// Qui nessuna callback del campione può interromperci (priorità 5, TIM1 è come noi a 4)
+	if (GET_ADC_VALUES_continous() != HAL_OK)
+	{
+		s_sample_wait &= (uint8_t)~DUST_SAMPLE_WAIT_SPI;
+	}
+	if (DUST_ADC4_Start() != HAL_OK)
+	{
+		s_sample_wait &= (uint8_t)~DUST_SAMPLE_WAIT_ADC;
+	}
+	if (s_sample_wait == 0u)
+	{
+		g_processing_lock = 0; // nessuna delle due letture è partita
+	}
+}
+
+// Tick di acquisizione: compare CH4 di TIM2, a metà del periodo di S0ck
+static void DUST_Acq_Tick(void)
+{
+	// Canale presente ora sull'uscita del sensore. In Auto il contatore del sensore avanza a ogni
+	// periodo anche quando il campione viene saltato, quindi l'indice avanza a ogni tick e non a
+	// ogni campione completato: così non si disallinea mai dal canale reale
+	uint8_t ch = (dcc_sel_ck == 1) ? g_manual_channel : next_ch;
+	uint8_t round_done = s_round_done; // il giro si è chiuso al tick precedente: canale 31 già elaborato
+
+	s_round_done = 0u;
+	next_ch++;
+	if (next_ch >= DUST_CHANNELS)
+	{
+		next_ch = 0u;
+		s_round_done = 1u;
+	}
+
+	// Prima il campione, poi i frame: l'istante di campionamento resta fisso nel periodo
+	DUST_Acq_StartSample(ch);
+
+	if (round_done != 0u)
+	{
+		DUST_Round_Completed();
+	}
+}
+
+void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
+{
+	if ((htim->Instance == TIM2) && (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_4))
+	{
+		DUST_Acq_Tick();
+	}
 }
 
 //void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
@@ -748,38 +967,45 @@ void HAL_LPTIM_AutoReloadMatchCallback(LPTIM_HandleTypeDef *hlptim)
 //    }
 //}
 
+// Una delle due letture del campione (ADS8867 via SPI, ADC4 via DMA) è arrivata: con l'ultima si
+// elabora il valore dell'ADS8867 (in interrupt, priorità 5: la radio resta più prioritaria) e si
+// riapre la catena di acquisizione
+static void DUST_Sample_PartDone(uint8_t part)
+{
+    uint8_t done = 0u;
+
+    // Le callback sono a priorità 5 ma TIM1 (4) può interromperle: aggiornamento atomico
+    UTILS_ENTER_LIMITED_CRITICAL_SECTION(DUST_ACQ_IRQ_BASEPRI);
+    if ((s_sample_wait & part) != 0u) // altrimenti è la callback di un campione già chiuso
+    {
+        s_sample_wait &= (uint8_t)~part;
+        done = (s_sample_wait == 0u);
+    }
+    UTILS_EXIT_LIMITED_CRITICAL_SECTION();
+
+    if (done)
+    {
+        if (s_sample_spi_ok != 0u)
+        {
+            DUST_Process(s_sample_ch, s_sample_spi, HAL_GetTick());
+        }
+        g_processing_lock = 0;
+    }
+}
+
 void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
 {
     if (hspi->Instance == SPI3)
     {
-        // 1. ALZA SUBITO IL CS PER L'SPI!
-        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);
-
-        pending_spi_val = Rx_Data_Buffer[0];
-        pending_ch_idx  = g_current_channel;
+        // CONVST resta basso fino al prossimo tick: il suo fronte di salita è l'istante di
+        // campionamento dell'ADS8867, alzarlo qui farebbe partire subito una nuova conversione
 
         // Protezione contro sovrapposizioni
-        if (g_processing_lock == 0) return; // Se siamo qui per sbaglio, esci
+        if ((s_sample_wait & DUST_SAMPLE_WAIT_SPI) == 0u) return; // Se siamo qui per sbaglio, esci
 
-        // 2. Risveglio hardware dell'ADC: prima il clock (senza clock le scritture sui registri
-        //    ADC4 vengono ignorate e ADC_Enable() resterebbe bloccato in questa ISR, dove
-        //    HAL_GetTick() non avanza), poi il regolatore
-        __HAL_RCC_ADC4_CLK_ENABLE();
-        if ((hadc4.Instance->CR & ADC_CR_ADVREGEN) == 0)
-        {
-            hadc4.Instance->CR |= ADC_CR_ADVREGEN;
-            // Delay a vuoto veloce per stabilizzare il regolatore (~20us)
-            uint32_t wait_loop = (SystemCoreClock / 1000000UL) * 20;
-            while(wait_loop--) { __NOP(); }
-        }
-
-        // 3. LANCIO DMA AUTOMATICO!
-        // L'ADC leggerà Rank 1 e Rank 2 alla massima velocità e li butterà in adc_dma_buf
-        if (HAL_ADC_Start_DMA(&hadc4, (uint32_t*)adc_dma_buf, 2) != HAL_OK)
-        {
-            // Se fallisce (es. errore hardware), sblocchiamo il semaforo
-            g_processing_lock = 0;
-        }
+        s_sample_spi = Rx_Data_Buffer[0];
+        s_sample_spi_ok = 1u;
+        DUST_Sample_PartDone(DUST_SAMPLE_WAIT_SPI);
     }
 }
 
@@ -787,73 +1013,33 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
 // 2. LA CALLBACK DELL'ADC (Scatta in automatico a fine lettura)
 // =========================================================
 
-void ADC_Start_Task(void)
-{
-    adc_read_step = 1;
-
-    // 1. FORZIAMO IL CLOCK DELLA PERIFERICA (in caso il Low Power lo abbia tagliato)
-    __HAL_RCC_ADC4_CLK_ENABLE();
-
-    // 2. FERMIAMO LA HAL per resettare lo stato interno
-    HAL_ADC_Stop(&hadc4);
-
-    // 3. RISVEGLIAMO L'HARDWARE (Uscita dal Low Power)
-    // Riaccendiamo il regolatore di tensione interno dell'ADC (Il vero colpevole)
-    if ((hadc4.Instance->CR & ADC_CR_ADVREGEN) == 0)
-    {
-        hadc4.Instance->CR |= ADC_CR_ADVREGEN;
-        // Il regolatore richiede tempo per stabilizzarsi (almeno 20us).
-        // Usiamo un delay brutale a colpi di clock per non bloccare gli interrupt.
-        uint32_t wait_loop_index = (SystemCoreClock / 1000000UL) * 20;
-        while(wait_loop_index != 0) { wait_loop_index--; }
-    }
-
-    // 4. LANCIO DEFINITIVO
-    HAL_StatusTypeDef status = HAL_ADC_Start_IT(&hadc4);
-
-    if (status == HAL_BUSY)
-    {
-        adc_read_step = 0;
-        LED_BLINKING(TIM_CHANNEL_2, pwm_buf); // ROSSO: Problema software (improbabile ora)
-    }
-    else if (status == HAL_ERROR)
-    {
-        adc_read_step = 0;
-        LED_BLINKING(TIM_CHANNEL_1, pwm_buf); // BLU: Se si accende ancora, il problema è a monte
-    }
-
-    if (status != HAL_OK)
-        {
-            adc_read_step = 0;
-            g_processing_lock = 0; // Rilascia il blocco in caso di errore!
-        }
-}
-
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 {
     if (hadc->Instance == ADC4)
     {
-        // I dati sono già stati estratti dall'hardware tramite DMA!
-        g_ch[g_current_channel].last_adc_neg = (uint8_t)adc_dma_buf[0]; // Rank 1: ADC4_IN8 = PA1 = OUT_N
-        g_ch[g_current_channel].last_adc_pos = (uint8_t)adc_dma_buf[1]; // Rank 2: ADC4_IN4 = PA5 = OUT_P
+        // I dati sono già stati estratti dall'hardware tramite DMA, nell'istante del tick!
+        if ((s_sample_wait & DUST_SAMPLE_WAIT_ADC) != 0u)
+        {
+            g_ch[s_sample_ch].last_adc_neg = adc_dma_buf[0]; // Rank 1: ADC4_IN8 = PA1 = OUT_N
+            g_ch[s_sample_ch].last_adc_pos = adc_dma_buf[1]; // Rank 2: ADC4_IN4 = PA5 = OUT_P
+        }
 
         // Fermiamo la modalità DMA dell'ADC in preparazione del prossimo giro
         HAL_ADC_Stop_DMA(&hadc4);
 
-        // Inneschiamo la task per l'elaborazione e la trasmissione (registrata in BLE_SENSOR_APP_Init)
-        UTIL_SEQ_SetTask(1U << CFG_TASK_DUST_PROCESS_ID, CFG_SEQ_PRIO_0);
+        DUST_Sample_PartDone(DUST_SAMPLE_WAIT_ADC);
     }
 }
 
-// Overrun o errore DMA dell'ADC4: la ConvCpltCallback non arriverà, quindi fermiamo
-// l'ADC e liberiamo il semaforo (il campione è perso, si riparte al prossimo LPTIM)
+// Overrun o errore DMA dell'ADC4: la ConvCpltCallback non arriverà, quindi fermiamo l'ADC e
+// chiudiamo la sua parte del campione (si perdono solo OUT_P/OUT_N, l'ADS8867 è buono)
 void HAL_ADC_ErrorCallback(ADC_HandleTypeDef* hadc)
 {
     if (hadc->Instance == ADC4)
     {
         g_adc_error_count++;
         HAL_ADC_Stop_DMA(&hadc4);
-        g_processing_lock = 0;
+        DUST_Sample_PartDone(DUST_SAMPLE_WAIT_ADC);
     }
 }
 //void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
@@ -867,55 +1053,6 @@ void HAL_ADC_ErrorCallback(ADC_HandleTypeDef* hadc)
 //        UTIL_SEQ_SetTask(1U << 20, CFG_SEQ_PRIO_0);
 //    }
 //}
-
-// =========================================================
-// 2. IL TASK IN BACKGROUND (Sicuro, può usare i delay e il polling)
-// =========================================================
-void DUST_Process_ADC_Task(void)
-{
-    // Niente LED_BLINKING qui: la task gira a ogni campione (~1.3 kHz) e riavvierebbe
-    // il PWM di TIM3 ogni volta. Il LED blu di connessione lo imposta già app_ble.c
-
-    uint32_t now_ms = HAL_GetTick(); // Ora non va più in stallo!
-
-    // 1. Legge gli ADC interni
-    //g_ch[pending_ch_idx].last_adc_pos = Read_Split_ADC(ADC_CHANNEL_8);
-    //g_ch[pending_ch_idx].last_adc_neg = Read_Split_ADC(ADC_CHANNEL_4);
-
-    // 2. Processa l'algoritmo particelle
-    DUST_Process(pending_ch_idx, pending_spi_val, now_ms);
-
-    next_ch++;
-
-    // 3. Gestione invio pacchetti
-    if (next_ch >= DUST_CHANNELS)
-    {
-        next_ch = 0u;
-        sending_round++;
-
-        if (g_enable_sd_saving == 1)
-        {
-            uint16_t RAM_frame_len = DUST_BuildFrame_RAM(uart_frame, sizeof(uart_frame));
-            if(RAM_frame_len > 0)
-                DUST_Save_To_Ram(uart_frame, RAM_frame_len);
-        }
-
-        if (sending_round >= SENDING_ROUND)
-        {
-            sending_round = 0;
-            if ((huart1.gState == HAL_UART_STATE_READY) && (g_usb_dust_stream_enabled == 1))
-            {
-                DUST_SendFrame_UART();
-            }
-            else if(g_ble_dust_stream_enabled == 1)
-            {
-                // Richiama il task che invia fisicamente i dati via Bluetooth
-                UTIL_SEQ_SetTask(1U << CFG_TASK_MYDATA_UPDATE_ID, CFG_SEQ_PRIO_0);
-            }
-        }
-    }
-    g_processing_lock = 0;
-}
 
 // ------------------- algoritmo canali ------------------- //
 
@@ -1013,7 +1150,7 @@ static void DUST_Internal_CallCallback(uint8_t ch, DustChannelState_t *s)
         ev.samples[i] = s->event_buf[i];
     }
 
-    // IMPORTANTE: questa funzione viene chiamata in contesto di ISR (SPI callback).
+    // IMPORTANTE: questa funzione viene chiamata in contesto di ISR (callback dell'ADC4).
     // Qui dentro la callback NON deve fare cose lente o bloccanti.
     g_dust_cb(&ev);
 }
@@ -1188,6 +1325,11 @@ uint16_t DUST_BuildFrame(uint8_t *dst, uint16_t max_len)
 {
     uint8_t *p = dst;
 
+    if (max_len < DUST_FRAME_LEN)
+    {
+        return 0u; // buffer troppo piccolo
+    }
+
     // Header
     *p++ = FRAME_SYNC1;
     *p++ = FRAME_SYNC2;
@@ -1205,19 +1347,25 @@ uint16_t DUST_BuildFrame(uint8_t *dst, uint16_t max_len)
 //    }
 
 
-    // Corpo: [PARTICLES][SPI_MSB][SPI_LSB][ADC_POS_8BIT][ADC_NEG_8BIT]
+    // Corpo: [PARTICLES][SPI_MSB][SPI_LSB][POS_MSB][POS_LSB][NEG_MSB][NEG_LSB] (OUT_P/OUT_N a 12 bit)
+	// I canali li aggiornano gli interrupt dell'acquisizione: la copia avviene con quegli interrupt
+	// bloccati (pochi us, la radio no), così ogni canale del frame è coerente
+	UTILS_ENTER_LIMITED_CRITICAL_SECTION(DUST_ACQ_IRQ_BASEPRI);
 	for (uint8_t ch = 0; ch < DUST_CHANNELS; ch++)
 	{
 		uint16_t spi_adc = g_ch[ch].last_raw; // Questo lo lasciamo a 16 bit se il sensore esterno lo richiede
-		uint8_t  adc_pos = g_ch[ch].last_adc_pos;
-		uint8_t  adc_neg = g_ch[ch].last_adc_neg;
+		uint16_t adc_pos = g_ch[ch].last_adc_pos;
+		uint16_t adc_neg = g_ch[ch].last_adc_neg;
 
 		*p++ = g_ch[ch].particle_count;
 		*p++ = (uint8_t)(spi_adc >> 8);
 		*p++ = (uint8_t)(spi_adc & 0xFF);
-		*p++ = adc_pos;
-		*p++ = adc_neg;
+		*p++ = (uint8_t)(adc_pos >> 8);
+		*p++ = (uint8_t)(adc_pos & 0xFF);
+		*p++ = (uint8_t)(adc_neg >> 8);
+		*p++ = (uint8_t)(adc_neg & 0xFF);
 	}
+	UTILS_EXIT_LIMITED_CRITICAL_SECTION();
 
     // Terminatore di riga
     *p++ = '\r';
@@ -1335,13 +1483,11 @@ uint16_t DUST_BuildFrame_RAM(uint8_t *dst, uint16_t max_len)
 
 }
 
-// Funzione per passare alla modalità MANUALE (GPIO)
+// Funzione per passare alla modalità MANUALE (GPIO). TIM2 non si ferma: dà anche i tick di
+// campionamento, la sua uscita semplicemente non arriva più al pin
 void Config_PA7_As_GPIO(void)
 {
-    // 1. Ferma il Timer per sicurezza
-    HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_3);
-
-    // 2. Riconfigura il pin come GPIO Output Standard
+    // Riconfigura il pin come GPIO Output Standard
     GPIO_InitTypeDef GPIO_InitStruct = {0};
     GPIO_InitStruct.Pin = GPIO_PIN_7;           // Usa PIN 7 diretto
     GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP; // Push-Pull normale (NO Alternate Function)
@@ -1354,7 +1500,8 @@ void Config_PA7_As_GPIO(void)
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_RESET);
 }
 
-// Funzione per passare alla modalità AUTOMATICA (PWM 4kHz)
+// Funzione per passare alla modalità AUTOMATICA: PA7 torna l'uscita PWM di TIM2_CH3 (S0ck).
+// Periodo (250us @ 96MHz), duty e avvio del timer li gestisce DUST_Timebase_Restart()
 void Config_PA7_As_PWM(void)
 {
     // 1. Assicuriamoci che i Clock siano attivi (serve se arriviamo da uno stop)
@@ -1369,28 +1516,4 @@ void Config_PA7_As_PWM(void)
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     GPIO_InitStruct.Alternate = GPIO_AF1_TIM2;   // Mappa su TIM2_CH3
     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-    // 3. Configura il Timer per 250us @ 96MHz
-    // Prescaler 95 -> 96MHz / 96 = 1 MHz (1 tick = 1us)
-    __HAL_TIM_SET_PRESCALER(&htim2, 95);
-
-    // Periodo 249 -> 250 tick totali = 250us
-    //__HAL_TIM_SET_AUTORELOAD(&htim2, 249);
-    __HAL_TIM_SET_AUTORELOAD(&htim2, g_pwm_arr);
-
-    // 4. Configura il Canale PWM (Duty 50%)
-    TIM_OC_InitTypeDef sConfigOC = {0};
-    sConfigOC.OCMode = TIM_OCMODE_PWM1;
-    //sConfigOC.Pulse = 125; // 125us Alto, 125us Basso
-    sConfigOC.Pulse = g_pwm_pulse;
-    sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-    sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-
-    // Applica configurazione al canale
-    HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_3);
-
-    // 5. Reset e Start
-    __HAL_TIM_SET_COUNTER(&htim2, 0);
-    HAL_TIM_GenerateEvent(&htim2, TIM_EVENTSOURCE_UPDATE); // Applica subito Prescaler
-    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
 }

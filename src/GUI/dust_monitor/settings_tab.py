@@ -226,7 +226,7 @@ class SettingsTab(ctk.CTkFrame):
         self.appearance_option.grid(row=1, column=3, sticky="w", pady=(0, 4))
         self.appearance_option.set(ctk.get_appearance_mode())
         sys_caption = theme.caption(sys_card, "How often the plots are redrawn. Data is always processed at the full rate "
-                                              "of the sensor (~21 frames/s), so higher values only cost CPU.")
+                                              "of the sensor (~62 frames/s), so higher values only cost CPU.")
         sys_caption.grid(row=2, column=0, columnspan=4, sticky="w", padx=20, pady=(2, 16))
         theme.autowrap(sys_caption, sys_card, margin=40)
 
@@ -505,7 +505,8 @@ class SettingsTab(ctk.CTkFrame):
             pass
 
     def _clamp_pwm(self, value):
-        return max(1, min(500, value))
+        # Il firmware accetta 1-5 kHz: è anche la frequenza di campionamento (DUST_PWM_FREQ_MAX_KHZ)
+        return max(1, min(5, value))
 
     def _send_pwm_command(self):
         self._send_bt(f"F{self.pwm_value.get()}".encode("ascii"))

@@ -28,6 +28,10 @@
 #define DUST_MIN_UNDER_SAMPLES  2u     // campioni consecutivi sotto soglia bassa
 #define DUST_EVENT_SAMPLES      5u     // quanti sample salvare per evento
 
+// Frame BLE/UART: AA 55 + 32 x [PARTICLES][SPI_MSB][SPI_LSB][POS_MSB][POS_LSB][NEG_MSB][NEG_LSB] + "\r\n"
+// = 228 byte (deve restare uguale al Value length di MyData nell'IOC e < ATT MTU - 3 = 248)
+#define DUST_FRAME_LEN          (2u + DUST_CHANNELS * 7u + 2u)
+
 #define RAM_BUFFER_SIZE  32768  // 8 KB di buffer totale
 #define WRITE_THRESHOLD  16384  // Scriviamo su SD quando arriviamo a metà (4KB)
 
@@ -46,19 +50,18 @@ extern volatile uint8_t dcc_sel_ck;
 //extern uint16_t pwm_buf[] = {13000, 13000, 0, 0, 0, 0, 0, 0, 0, 0}; //to use in case of PWM DMA
 
 void DATA_RECEIVED(const uint8_t *data_received, uint16_t len);
-static inline void CHANNEL_SET(uint8_t channel);
-static inline void CHANNEL_SET_Init(void);
 void LED_BLINKING(const uint32_t LED_COLOR, uint16_t *pwm_buf);
 void GET_ADC_VALUES();
-void GET_ADC_VALUES_continous();
+HAL_StatusTypeDef GET_ADC_VALUES_continous(void);
 void DUST_Process(uint8_t channel, uint16_t raw_sample, uint32_t timestamp_ms);
 extern void SD_Write_Buffer(uint8_t *pData, uint32_t length);
 void DUST_Save_To_Ram(uint8_t *new_data, uint16_t data_len);
 void Config_PA7_As_GPIO(void);
 void Config_PA7_As_PWM(void);
 
-void ADC_Start_Task(void);
-void DUST_Process_ADC_Task(void);
+// SPI3 è condivisa con la SD: sospende i campionamenti senza perdere l'allineamento dei canali
+void DUST_Acq_Pause(void);
+void DUST_Acq_Resume(void);
 
 typedef struct
 {
