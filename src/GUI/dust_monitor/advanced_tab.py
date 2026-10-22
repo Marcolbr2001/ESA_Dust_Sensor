@@ -3,16 +3,18 @@ import tkinter as tk
 import customtkinter as ctk
 
 from . import theme
-from .widgets import ChannelPreview, ChannelWindow
+from .widgets import ZOOM_SECONDS, ChannelPreview, ChannelWindow, ZoomButtons, zoom_points
 
 
 class AdvancedTab(ctk.CTkFrame):
     """Tab 'Channels': griglia 8x4 di anteprime canali + comandi acquisizione, salvataggio e visualizzazione."""
 
-    def __init__(self, master, controller, num_channels: int = 32):
+    def __init__(self, master, controller, num_channels: int = 32, frame_rate: float = 62.5):
         super().__init__(master, fg_color="transparent")
         self.controller = controller
         self.num_channels = num_channels
+        self.frame_rate = frame_rate
+        self._zoom_idx = 0  # finestra delle anteprime: ZOOM_SECONDS[0] = 0.8 s
         pad, gap = theme.PAD, theme.GAP
 
         # riga 0: comandi, riga 1: griglia
@@ -54,8 +56,6 @@ class AdvancedTab(ctk.CTkFrame):
         self._legend_pos.pack(side="left", padx=(8, 6))
         self._legend_neg = ctk.CTkLabel(self._legend, text="┅ OUT_N", font=theme.font(11, "bold"))
         self._legend_neg.pack(side="left")
-        # Asse destro dei grafici: scostamento di ogni traccia dalla sua mediana (widgets.TimeSeriesGraph)
-        theme.caption(self._legend, "mV from median", font=theme.font(11)).pack(side="left", padx=(6, 0))
         self._apply_legend_colors()
         self._sep_mode = theme.separator(g)
         self._sep_mode.pack(side="left", padx=12)
@@ -87,6 +87,14 @@ class AdvancedTab(ctk.CTkFrame):
         self.units_switch.set("Bit")
         self.units_switch.pack(side="left", padx=(0, 4))
 
+        theme.separator(g).pack(side="left", padx=12)
+
+        # --- Zoom nel tempo: stessa finestra per tutte le anteprime ---
+        self.zoom_buttons = ZoomButtons(g, command=self._on_zoom)
+        self.zoom_buttons.pack(side="left")
+        self.zoom_label = theme.caption(g, "", width=36)  # larghezza fissa: la barra non si sposta
+        self.zoom_label.pack(side="left", padx=(4, 4))
+
         self._update_manual_ch_ui()
         self._toolbar_wrapped = None
         self._layout_toolbar(False)
@@ -103,13 +111,17 @@ class AdvancedTab(ctk.CTkFrame):
         for row in range(4):
             grid_frame.grid_rowconfigure(row, weight=1, uniform="ch_row")
 
+        # Ogni anteprima tiene la storia della finestra più lunga: lo zoom out la mostra subito
+        capacity = zoom_points(ZOOM_SECONDS[-1], frame_rate)
         self.channel_previews = []
         for ch in range(num_channels):
-            preview = ChannelPreview(grid_frame, channel_id=ch + 1, click_callback=self._open_channel_window)
+            preview = ChannelPreview(grid_frame, channel_id=ch + 1, click_callback=self._open_channel_window,
+                                     capacity=capacity)
             preview.grid(row=ch // 8, column=ch % 8, padx=4, pady=4, sticky="nsew")
             self.channel_previews.append(preview)
 
         self.channel_windows = {}
+        self._apply_zoom()
 
     # ====================================================================== #
     # LAYOUT RESPONSIVE DELLA BARRA COMANDI
@@ -247,6 +259,19 @@ class AdvancedTab(ctk.CTkFrame):
             except tk.TclError:
                 pass
         self.after_idle(self._on_toolbar_resize)  # la legenda cambia la larghezza richiesta
+
+    def _on_zoom(self, step):
+        """Lenti: -1 accorcia la finestra di tutte le anteprime (zoom in), +1 la allunga."""
+        self._zoom_idx = max(0, min(len(ZOOM_SECONDS) - 1, self._zoom_idx + step))
+        self._apply_zoom()
+
+    def _apply_zoom(self):
+        seconds = ZOOM_SECONDS[self._zoom_idx]
+        points = zoom_points(seconds, self.frame_rate)
+        for preview in self.channel_previews:
+            preview.set_window(points)
+        self.zoom_buttons.set_limits(self._zoom_idx > 0, self._zoom_idx < len(ZOOM_SECONDS) - 1)
+        self.zoom_label.configure(text=f"{seconds:g} s")
 
     def _on_units_changed(self, value):
         mode = "voltage" if value == "Volt" else "bit"

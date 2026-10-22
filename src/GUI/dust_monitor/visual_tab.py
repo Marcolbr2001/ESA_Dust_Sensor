@@ -6,7 +6,8 @@ from collections import Counter
 import customtkinter as ctk
 
 from . import theme
-from .widgets import GlobalGraph, _nice_step
+from .widgets import (ZOOM_SECONDS, ChannelPreview, GlobalGraph, TimeSeriesGraph, ZoomButtons, _nice_step,
+                      zoom_points)
 
 # --- COSTANTI PER CALCOLO PPM ---
 SENSOR_AREA_MM2 = 12.0          # Area totale sensore in mm^2
@@ -18,6 +19,10 @@ PPM_FACTOR = (PARTICLE_AREA_MM2 / SENSOR_AREA_MM2) * 1_000_000
 
 # Fattore di conversione: 10 LSB = 1 µm -> 1 LSB = 0.1 µm
 LSB_TO_UM = 0.1
+
+# Contenuto della card del grafico: conteggio globale (default), tutti i canali o un canale solo
+VIEW_COUNT, VIEW_ALL, VIEW_ONE = "Count", "All channels", "One channel"
+TILE_COLUMNS = 8
 
 
 # --- CLASSE ISTOGRAMMA ---
@@ -321,11 +326,13 @@ class ParticleHistogram(tk.Canvas):
 
 
 class VisualTab(ctk.CTkFrame):
-    """Tab 'Global': comandi, conteggio globale, andamento nel tempo e istogramma."""
+    """Tab 'Global': comandi, conteggio globale, andamento nel tempo (o i canali) e istogramma."""
 
-    def __init__(self, master, controller):
+    def __init__(self, master, controller, num_channels: int = 32, frame_rate: float = 62.5):
         super().__init__(master, fg_color="transparent")
         self.controller = controller
+        self.num_channels = num_channels
+        self.frame_rate = frame_rate
         pad, gap = theme.PAD, theme.GAP
 
         self._count = 0
@@ -379,15 +386,43 @@ class VisualTab(ctk.CTkFrame):
         ctk.CTkFrame(self.summary, height=10, fg_color="transparent").grid(row=6, column=0)
         self.summary.bind("<Configure>", self._fit_count_font)
 
+        # Card del grafico: conteggio globale (default), tutti i canali o un canale solo. Le viste dei
+        # canali sono una versione leggera della tab Channels (niente comandi, niente OUT_P/OUT_N):
+        # rileggono la storia dei canali dell'App al disegno, quindi non costano nulla finché sono
+        # nascoste e seguono da sole Reset, modo Manual, maschere e unità (Bit/Volt) della tab Channels
+        self._view = VIEW_COUNT
+        self._view_ch = 0               # canale (da 0) della vista "One channel"
+        self._synced_frames = None      # ultimo frame dell'App copiato nelle viste dei canali
+        self._tiles = None              # anteprime dei canali, create alla prima apertura
+        self._tiles_frame = None
+        self._one_graph = None
+        self._span_text = ""
+        self._caption_shown = None
+        # Zoom nel tempo (lenti), uno per vista come indice in ZOOM_SECONDS: conteggio e canale
+        # singolo partono da ~5 s, le anteprime da 0.8 s come nella tab Channels
+        self._zoom = {VIEW_COUNT: ZOOM_SECONDS.index(5), VIEW_ALL: 0, VIEW_ONE: ZOOM_SECONDS.index(5)}
+        self._capacity = zoom_points(ZOOM_SECONDS[-1], frame_rate)  # storia tenuta dai grafici
+
         graph_card = theme.card(mid)
         graph_card.grid(row=0, column=1, sticky="nsew")
         graph_card.grid_rowconfigure(1, weight=1)
-        graph_card.grid_columnconfigure(0, weight=1)
-        theme.section_title(graph_card, "Particle count over time", size=14).grid(
-            row=0, column=0, sticky="w", padx=16, pady=(12, 0))
-        theme.caption(graph_card, "last ~15 s").grid(row=0, column=1, sticky="e", padx=16, pady=(12, 0))
-        self.global_graph = GlobalGraph(graph_card, max_points=300)
-        self.global_graph.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=10, pady=(4, 10))
+        graph_card.grid_columnconfigure(2, weight=1)
+        self._graph_card = graph_card
+        self.graph_title = theme.section_title(graph_card, "", size=14)
+        self.graph_title.grid(row=0, column=0, sticky="w", padx=(16, 10), pady=(12, 0))
+        # Vista "One channel": il titolo diventa "Channel [n ▾]"
+        self.channel_menu = ctk.CTkOptionMenu(graph_card, values=[str(i) for i in range(1, num_channels + 1)],
+                                              width=64, command=self._on_view_channel_changed)
+        self.graph_caption = theme.caption(graph_card, "")
+        self.graph_caption.grid(row=0, column=2, sticky="w", pady=(12, 0))
+        self.view_switch = ctk.CTkSegmentedButton(graph_card, values=[VIEW_COUNT, VIEW_ALL, VIEW_ONE],
+                                                  command=self._on_view_changed)
+        self.view_switch.set(VIEW_COUNT)
+        self.view_switch.grid(row=0, column=4, sticky="e", padx=(0, 12), pady=(12, 0))
+        self.zoom_buttons = ZoomButtons(graph_card, command=self._on_zoom)
+        self.zoom_buttons.grid(row=0, column=3, sticky="e", padx=(0, 6), pady=(12, 0))
+        self.global_graph = GlobalGraph(graph_card, capacity=self._capacity)
+        self._show_view()
 
         # === ISTOGRAMMA ===
         hist_card = theme.card(self)
@@ -439,8 +474,47 @@ class VisualTab(ctk.CTkFrame):
             if text != self._rate_shown:
                 self.param_labels["Events / s"].configure(text=text)
                 self._rate_shown = text
-        self.global_graph.render()
+        if self._view == VIEW_COUNT:
+            self.global_graph.render()
+            self._set_caption(self._span_text)
+        else:
+            self._render_channels()
         self.histogram.render()
+
+    def _render_channels(self):
+        """Viste dei canali: copiano la storia dei canali dell'App solo quando arrivano frame nuovi."""
+        c = self.controller
+        fresh = c._rx_frames != self._synced_frames
+        self._synced_frames = c._rx_frames
+        mode = c.advanced_tab.display_mode.get()
+        if self._view == VIEW_ALL:
+            for ch, tile in enumerate(self._tiles):
+                self._sync_channel(tile, tile.graph, ch, fresh, mode)
+                tile.set_particles(c.channel_particles[ch])
+                tile.render()
+            self._set_caption(self._span_text)
+        else:
+            ch = self._view_ch
+            self._sync_channel(self._one_graph, self._one_graph, ch, fresh, mode)
+            self._one_graph.render()
+            self._set_caption(f"Pt: {c.channel_particles[ch]}  ·  {self._span_text}")
+
+    def _sync_channel(self, view, graph, ch, fresh, mode):
+        """Porta una vista (anteprima o grafico) allo stato del canale 'ch' nell'App."""
+        c = self.controller
+        history = c.channel_history[ch]
+        # Storia svuotata (canali non selezionati in Manual) anche senza frame nuovi
+        if (fresh and history) or (graph.values and not history):
+            graph.set_values(history)
+        if view.is_active != c.channel_mask[ch]:
+            view.set_active_state(c.channel_mask[ch])
+        if graph.display_mode != mode:
+            view.set_display_mode(mode)
+
+    def _set_caption(self, text):
+        if text != self._caption_shown:
+            self.graph_caption.configure(text=text)
+            self._caption_shown = text
 
     def _set_hist_stats(self, text):
         if text != self._hist_stats_shown:
@@ -450,6 +524,88 @@ class VisualTab(ctk.CTkFrame):
     def apply_theme(self):
         self.global_graph.apply_theme()
         self.histogram.apply_theme()
+        for tile in self._tiles or ():
+            tile.apply_theme()
+        if self._one_graph is not None:
+            self._one_graph.apply_theme()
+
+    # ------------------------------------------------------------------ viste della card del grafico
+
+    def _on_view_changed(self, view):
+        self._view = view
+        self._show_view()
+        self.render()
+
+    def _on_zoom(self, step):
+        """Lenti: -1 accorcia la finestra della vista mostrata (zoom in), +1 la allunga."""
+        self._zoom[self._view] = max(0, min(len(ZOOM_SECONDS) - 1, self._zoom[self._view] + step))
+        self._show_view()
+        self.render()
+
+    def _on_view_channel_changed(self, value):
+        self._view_ch = int(value) - 1
+        self._show_view()
+        self.render()
+
+    def _on_tile_clicked(self, channel_id):
+        """Clic su un'anteprima: la card passa a quel canale da solo."""
+        self._view_ch = channel_id - 1
+        self.channel_menu.set(str(channel_id))
+        self.view_switch.set(VIEW_ONE)
+        self._on_view_changed(VIEW_ONE)
+
+    def _show_view(self):
+        """Mette nella card la vista scelta (quelle dei canali si creano alla prima apertura)."""
+        if self._view == VIEW_ALL and self._tiles is None:
+            self._build_tiles()
+        if self._view == VIEW_ONE and self._one_graph is None:
+            self._one_graph = TimeSeriesGraph(self._graph_card, font_size=9, capacity=self._capacity)
+        for view, widget in ((VIEW_COUNT, self.global_graph), (VIEW_ALL, self._tiles_frame),
+                             (VIEW_ONE, self._one_graph)):
+            if widget is None:
+                continue
+            if view == self._view:
+                widget.grid(row=1, column=0, columnspan=5, sticky="nsew", padx=10, pady=(4, 10))
+            else:
+                widget.grid_remove()
+        if self._view == VIEW_ONE:
+            self.channel_menu.grid(row=0, column=1, sticky="w", padx=(0, 10), pady=(12, 0))
+        else:
+            self.channel_menu.grid_remove()
+
+        if self._view == VIEW_COUNT:
+            title, graphs = "Particle count over time", [self.global_graph]
+        elif self._view == VIEW_ALL:
+            title, graphs = "All channels", [tile.graph for tile in self._tiles]
+        else:
+            title, graphs = "Channel", [self._one_graph]
+        self.graph_title.configure(text=title)
+        zoom = self._zoom[self._view]
+        seconds = ZOOM_SECONDS[zoom]
+        for graph in graphs:
+            graph.set_window(zoom_points(seconds, self.frame_rate))
+        self.zoom_buttons.set_limits(zoom > 0, zoom < len(ZOOM_SECONDS) - 1)
+        self._span_text = f"last ~{seconds:g} s"
+        self._synced_frames = None  # la vista appena aperta (o zoomata) copia subito la storia
+
+    def _build_tiles(self):
+        # Altezza richiesta piccola come quella del grafico del conteggio: cambiando vista la card
+        # (e l'istogramma sotto) non cambia dimensione, le anteprime si dividono lo spazio che c'è
+        frame = ctk.CTkFrame(self._graph_card, fg_color="transparent", height=60)
+        frame.grid_propagate(False)
+        rows = math.ceil(self.num_channels / TILE_COLUMNS)
+        for col in range(TILE_COLUMNS):
+            frame.grid_columnconfigure(col, weight=1, uniform="tile_col")
+        for row in range(rows):
+            frame.grid_rowconfigure(row, weight=1, uniform="tile_row")
+        self._tiles = []
+        for ch in range(self.num_channels):
+            # Bordo sottile: le anteprime hanno lo stesso colore della card che le contiene
+            tile = ChannelPreview(frame, channel_id=ch + 1, click_callback=self._on_tile_clicked, compact=True,
+                                  capacity=self._capacity, border_width=1, border_color=theme.SEPARATOR)
+            tile.grid(row=ch // TILE_COLUMNS, column=ch % TILE_COLUMNS, padx=2, pady=2, sticky="nsew")
+            self._tiles.append(tile)
+        self._tiles_frame = frame
 
     def _fit_count_font(self, event=None):
         # Si calcola a layout completato (dopo il ridimensionamento della card)

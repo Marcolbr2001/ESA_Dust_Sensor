@@ -16,6 +16,7 @@ from .visual_tab import VisualTab
 from .advanced_tab import AdvancedTab
 from .settings_tab import SettingsTab
 from .analysis_tab import AnalysisTab
+from .widgets import ZOOM_SECONDS, zoom_points
 from collections import Counter, deque
 import datetime
 
@@ -106,8 +107,10 @@ class App(ctk.CTk):
         self.channel_values = [0 for _ in range(DUST_CHANNELS)]
         self.channel_particles = [0 for _ in range(DUST_CHANNELS)]
         self.global_count = 0
-        # ~6.4 s per canale a 62.5 frame/s: serve anche a ritrovare il gradino di ogni particella (vedi _estimate_amplitude)
-        self.channel_history = [deque(maxlen=400) for _ in range(DUST_CHANNELS)]
+        # Quanto basta alla finestra più lunga dello zoom (le viste della tab Global la rileggono da qui);
+        # serve anche a ritrovare il gradino di ogni particella (vedi _estimate_amplitude)
+        history_len = max(400, zoom_points(ZOOM_SECONDS[-1], FRAME_RATE))
+        self.channel_history = [deque(maxlen=history_len) for _ in range(DUST_CHANNELS)]
 
         # Eventi al secondo (globale e per canale)
         self.global_rate = EventRate()
@@ -216,11 +219,13 @@ class App(ctk.CTk):
         self.connection_tab = ConnectionTab(self.tab_connection_page, controller=self)
         self.connection_tab.pack(fill="both", expand=True)
 
-        self.visual_tab = VisualTab(self.tab_visual_page, controller=self)
+        self.visual_tab = VisualTab(self.tab_visual_page, controller=self, num_channels=DUST_CHANNELS,
+                                    frame_rate=FRAME_RATE)
         self.visual_tab.pack(fill="both", expand=True)
         self.visual_tab.histogram.max_val = self.HISTO_MAX_VAL
 
-        self.advanced_tab = AdvancedTab(self.tab_advanced_page, controller=self, num_channels=DUST_CHANNELS)
+        self.advanced_tab = AdvancedTab(self.tab_advanced_page, controller=self, num_channels=DUST_CHANNELS,
+                                        frame_rate=FRAME_RATE)
         self.advanced_tab.pack(fill="both", expand=True)
 
         self.settings_tab = SettingsTab(self.tab_settings_page, controller=self)

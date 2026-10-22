@@ -5,8 +5,18 @@ import tkinter.font as tkfont
 from collections import deque
 
 import customtkinter as ctk
+from PIL import Image, ImageDraw
 
 from . import theme
+
+# Zoom nel tempo dei grafici dei canali (lenti +/-): finestre in secondi, dalla più stretta alla più
+# larga. Un canale riceve un campione a ogni frame (~62.5/s): 0.8 s sono i 50 punti di sempre
+ZOOM_SECONDS = (0.8, 2, 5, 10, 20, 30)
+
+
+def zoom_points(seconds, frame_rate):
+    """Campioni (frame) in una finestra di 'seconds' secondi."""
+    return max(2, round(seconds * frame_rate))
 
 
 def _nice_step(raw, integer=False):
@@ -38,14 +48,13 @@ class TimeSeriesGraph(tk.Canvas):
     N_TICKS = 3          # etichette asse Y (min, metà, max)
     GRID_X = 4           # linee verticali
     INTEGER_TICKS = False
-    # OUT_P/OUT_N: codici a 12 bit dell'ADC4 (riferimento VDDA) su un loro asse a destra, in mV attorno
-    # alla mediana di ciascuna traccia: i due livelli distano centinaia di mV e su un asse comune in volt
-    # il loro rumore (pochi mV) sarebbe una linea piatta. I valori assoluti sono nelle etichette P/N
+    LINE_WIDTH = 1.5     # traccia principale; decimata (zoom out) è da 1 px: le linee spesse costano molto a Tk
+    # OUT_P/OUT_N: codici a 12 bit dell'ADC4 (riferimento VDDA), con un loro asse in volt a destra
     ADC4_VREF = 3.3
     ADC4_CODES = 4096
-    ADC4_MIN_SPAN = 4    # codici sopra e sotto la mediana: l'asse destro non zooma oltre (1 codice = 0.8 mV)
+    ADC4_MIN_SPAN = 8    # codici: l'asse destro non zooma oltre (1 codice = 0.8 mV)
 
-    def __init__(self, master, max_points=50, y_labels=True, font_size=8, **kwargs):
+    def __init__(self, master, max_points=50, y_labels=True, font_size=8, capacity=None, **kwargs):
         colors = theme.plot_colors()
         kwargs.setdefault("bg", colors["bg"])
         kwargs.setdefault("width", 100)
@@ -53,10 +62,12 @@ class TimeSeriesGraph(tk.Canvas):
         kwargs.setdefault("highlightthickness", 0)
         super().__init__(master, **kwargs)
 
-        self.max_points = max_points
-        self.values = deque(maxlen=max_points)
-        self.adc_pos_values = deque(maxlen=max_points)
-        self.adc_neg_values = deque(maxlen=max_points)
+        self.max_points = max_points   # campioni mostrati: la finestra, cambia con lo zoom (set_window)
+        # Campioni tenuti: con capacity > max_points lo zoom out mostra subito la storia già ricevuta
+        keep = max(capacity or max_points, max_points)
+        self.values = deque(maxlen=keep)
+        self.adc_pos_values = deque(maxlen=keep)
+        self.adc_neg_values = deque(maxlen=keep)
         self.display_mode = "bit"
         self.is_active = True
         self.show_adcs = False
@@ -68,7 +79,7 @@ class TimeSeriesGraph(tk.Canvas):
         self._dirty = True
         self._geom_dirty = True
         self._range = None             # (lo, hi) attuale dell'asse Y
-        self._rhalf = None             # semiampiezza in mV dell'asse destro (OUT_P/OUT_N), simmetrico su 0
+        self._rrange = None            # (lo, hi) in volt dell'asse destro (OUT_P/OUT_N)
         self._tick_key = None          # ultimo contenuto delle etichette
         self._rtick_key = None
         self._rlabel_w = None
@@ -84,7 +95,8 @@ class TimeSeriesGraph(tk.Canvas):
         self._adc_neg = self.create_line(0, 0, 0, 0, width=1, dash=(3, 2), state="hidden")
         self._adc_pos_txt = self.create_text(0, 0, anchor="ne", font=self._font, state="hidden")
         self._adc_neg_txt = self.create_text(0, 0, anchor="ne", font=self._font, state="hidden")
-        self._line = self.create_line(0, 0, 0, 0, width=1.5, state="hidden")
+        self._line = self.create_line(0, 0, 0, 0, width=self.LINE_WIDTH, state="hidden")
+        self._line_width = self.LINE_WIDTH
         self._apply_item_colors()
 
         self.bind("<Configure>", self._on_resize)
@@ -102,12 +114,33 @@ class TimeSeriesGraph(tk.Canvas):
     def add_value(self, value, adc_pos=None, adc_neg=None):
         self.push(value, adc_pos, adc_neg)
 
+    def set_values(self, values):
+        """Sostituisce i dati con gli ultimi max_points valori di 'values', senza OUT_P/OUT_N
+        (viste che rileggono una storia già raccolta altrove, es. la tab Global)."""
+        self.values.clear()
+        self.values.extend(self._tail(values))
+        self.adc_pos_values.clear()
+        self.adc_neg_values.clear()
+        self._dirty = True
+
+    def set_window(self, points):
+        """Zoom nel tempo: mostra gli ultimi 'points' campioni (al massimo quelli tenuti)."""
+        points = max(2, min(int(points), self.values.maxlen))
+        if points != self.max_points:
+            self.max_points = points
+            self._dirty = True
+
+    def _tail(self, samples):
+        """Gli ultimi max_points campioni (la finestra mostrata), come lista."""
+        samples = list(samples)
+        return samples[-self.max_points:] if len(samples) > self.max_points else samples
+
     def clear(self):
         self.values.clear()
         self.adc_pos_values.clear()
         self.adc_neg_values.clear()
         self._range = None
-        self._rhalf = None
+        self._rrange = None
         self._dirty = True
 
     # ------------------------------------------------------------------ stato
@@ -119,7 +152,7 @@ class TimeSeriesGraph(tk.Canvas):
 
     def set_show_adcs(self, state: bool):
         self.show_adcs = state
-        self._rhalf = None
+        self._rrange = None
         self._rtick_key = None
         self._geom_dirty = True        # l'asse destro toglie spazio all'area del grafico
         self._dirty = True
@@ -193,27 +226,32 @@ class TimeSeriesGraph(tk.Canvas):
 
     def _rlabel_width(self):
         if self._rlabel_w is None:
-            self._rlabel_w = tkfont.Font(font=self._font).measure("-888mV")
+            self._rlabel_w = tkfont.Font(font=self._font).measure("3.300V")
         return self._rlabel_w
 
     @staticmethod
-    def _format_mv(val):
-        if abs(val) < 1e-9:
-            return "0"
-        if abs(val) >= 1000:
-            return f"{val / 1000:+g}V"
-        return f"{val:+g}mV"
+    def _format_volts(val, step):
+        return f"{val:.{3 if step < 0.01 else 2}f}V"
 
-    def _scale_adc(self, max_dev):
-        """Semiampiezza 'tonda' in mV dell'asse destro (simmetrico, 0 = mediana di ogni traccia), unica
-        per OUT_P e OUT_N così le loro escursioni si confrontano: isteresi come l'asse sinistro, ma mai
-        sotto ADC4_MIN_SPAN codici."""
-        half = self._rhalf
-        if half is not None and 0.25 * half <= max_dev <= half:
-            return half
-        min_half = self.ADC4_MIN_SPAN * 1000.0 * self.ADC4_VREF / self.ADC4_CODES
-        self._rhalf = _nice_step(max(max_dev, min_half) * 1.1)
-        return self._rhalf
+    def _scale_adc(self, volts):
+        """Asse destro in volt, unico per OUT_P e OUT_N (si vede anche la loro distanza):
+        passi 'tondi' e isteresi come l'asse sinistro, ma mai più stretto di ADC4_MIN_SPAN codici."""
+        mn, mx = min(volts), max(volts)
+        if self._rrange is not None:
+            lo, hi = self._rrange
+            if lo <= mn and mx <= hi and (mx - mn) >= 0.25 * (hi - lo):
+                return self._rrange
+        n = self.N_TICKS - 1
+        min_span = self.ADC4_MIN_SPAN * self.ADC4_VREF / self.ADC4_CODES
+        step = _nice_step(max(mx - mn, min_span) * 1.1 / n)
+        while True:
+            lo = math.floor(mn / step) * step
+            hi = lo + n * step
+            if hi >= mx:
+                break
+            step = _nice_step(step * 1.01)
+        self._rrange = (lo, hi)
+        return self._rrange
 
     # ------------------------------------------------------------------ disegno
 
@@ -245,35 +283,56 @@ class TimeSeriesGraph(tk.Canvas):
         self.coords(self._adc_pos_txt, left + pw - 2 * s, top + 1 * s)
         self.coords(self._adc_neg_txt, left + pw - 2 * s, top + 13 * s)
 
-    def _x_positions(self, n, left, pw):
-        """Campioni allineati a destra: i nuovi entrano da destra e scorrono verso sinistra."""
-        denom = max(1, self.max_points - 1)
+    @staticmethod
+    def _columns(pw):
+        """Colonne del disegno decimato: una ogni 2 pixel."""
+        return max(1, int(pw / 2))
+
+    def _samples(self, data, left, pw, has_none=False):
+        """(x, valore) da disegnare, campioni allineati a destra: i nuovi entrano da destra e scorrono
+        verso sinistra. Con più campioni che pixel ogni colonna porta solo il minimo e il massimo dei
+        suoi (min/max in C sulle fette): gradini e picchi restano visibili, il rumore diventa una banda
+        piena e una finestra lunga (zoom out) costa come un punto per pixel. has_none: in data ci sono
+        None (OUT_P/OUT_N mancanti)."""
+        n = len(data)
         offset = self.max_points - n
-        return [left + pw * (i + offset) / denom for i in range(n)]
+        cols = self._columns(pw)
+        if n <= 2 * cols:
+            denom = max(1, self.max_points - 1)
+            return [(left + pw * (i + offset) / denom, v) for i, v in enumerate(data)]
+        per_col = self.max_points / cols
+        out = []
+        for c in range(int(offset / per_col), cols):
+            seg = data[max(0, math.ceil(c * per_col) - offset):max(0, math.ceil((c + 1) * per_col) - offset)]
+            if has_none:
+                seg = [v for v in seg if v is not None]
+            if seg:
+                x = left + pw * (c + 0.5) / cols
+                out.append((x, min(seg)))
+                out.append((x, max(seg)))
+        return out
 
     def _line_points(self, data, lo, hi, left, top, pw, ph):
         span = (hi - lo) or 1
-        xs = self._x_positions(len(data), left, pw)
         pts = []
-        for x, v in zip(xs, data):
+        for x, v in self._samples(data, left, pw):
             v = lo if v < lo else hi if v > hi else v
             pts.append(x)
             pts.append(top + ph * (1.0 - (v - lo) / span))
         return pts
 
-    def _adc_points(self, codes, base, half, left, top, pw, ph):
-        """Codici dell'ADC4 come linea a gradini sull'asse destro (scostamento in mV dal codice 'base',
-        su +-half): sono quantizzati, una linea obliqua tra due codici mostrerebbe valori mai misurati.
-        I campioni None si saltano."""
-        k = 1000.0 * self.ADC4_VREF / self.ADC4_CODES
-        xs = self._x_positions(len(codes), left, pw)
+    def _adc_points(self, codes, lo, hi, left, top, pw, ph, has_none=True):
+        """Codici dell'ADC4 come linea a gradini sull'asse destro (lo, hi in volt): sono quantizzati,
+        una linea obliqua tra due codici mostrerebbe valori mai misurati. I campioni None si saltano."""
+        span = (hi - lo) or 1
+        k = self.ADC4_VREF / self.ADC4_CODES
         pts = []
         prev_y = None
-        for x, code in zip(xs, codes):
+        for x, code in self._samples(codes, left, pw, has_none):
             if code is None:
                 continue
-            d = min(max((code - base) * k, -half), half)
-            y = top + ph * (0.5 - d / (2 * half))
+            v = min(max(code * k, lo), hi)
+            y = top + ph * (1.0 - (v - lo) / span)
             if prev_y is not None and y != prev_y:
                 pts.extend((x, prev_y))
             pts.extend((x, y))
@@ -297,7 +356,7 @@ class TimeSeriesGraph(tk.Canvas):
             self._tick_key = None
         left, top, pw, ph, labels = self._layout
 
-        data = self.values
+        data = self._tail(self.values)
         if len(data) < 2:
             for item in (self._line, self._adc_pos, self._adc_neg, self._adc_pos_txt, self._adc_neg_txt, *self._rticks):
                 self.itemconfigure(item, state="hidden")
@@ -311,49 +370,56 @@ class TimeSeriesGraph(tk.Canvas):
                 self.itemconfigure(item, text=self._format_tick(val))
             self._tick_key = key
 
+        # Finestra con più campioni che pixel (zoom out): traccia decimata, da 1 px
+        width = 1 if self.max_points > 2 * self._columns(pw) else self.LINE_WIDTH
+        if width != self._line_width:
+            self.itemconfigure(self._line, width=width)
+            self._line_width = width
         self.coords(self._line, *self._line_points(data, lo, hi, left, top, pw, ph))
         self.itemconfigure(self._line, state="normal")
 
         self._render_adcs(labels, left, top, pw, ph)
 
     def _render_adcs(self, labels, left, top, pw, ph):
-        """OUT_P (continua) e OUT_N (tratteggiata) sul loro asse a destra, come scostamento in mV dalla
-        mediana di ciascuna nella finestra (una particella non la sposta): la scala della traccia blu
-        (ADS8867, 16 bit, ~0.1 mV) non vale per loro (ADC4, 12 bit, 0.8 mV)."""
+        """OUT_P (continua) e OUT_N (tratteggiata) sul loro asse in volt a destra: la scala della
+        traccia blu (ADS8867, 16 bit, ~0.1 mV) non vale per loro (ADC4, 12 bit, 0.8 mV)."""
+        k = self.ADC4_VREF / self.ADC4_CODES
         traces = []
-        for line, txt, name, codes in ((self._adc_pos, self._adc_pos_txt, "P", self.adc_pos_values),
-                                       (self._adc_neg, self._adc_neg_txt, "N", self.adc_neg_values)):
-            valid = sorted(c for c in codes if c is not None)
-            traces.append((line, txt, name, codes, valid[len(valid) // 2] if valid else None, valid))
-        if not (self.show_adcs and any(t[4] is not None for t in traces)):
+        volts = []
+        if self.show_adcs:
+            for line, txt, name, samples in ((self._adc_pos, self._adc_pos_txt, "P", self.adc_pos_values),
+                                             (self._adc_neg, self._adc_neg_txt, "N", self.adc_neg_values)):
+                codes = self._tail(samples)
+                has_none = None in codes
+                valid = [c for c in codes if c is not None] if has_none else codes
+                if valid:
+                    volts += (min(valid) * k, max(valid) * k)
+                traces.append((line, txt, name, codes, has_none, valid[-1] if valid else None))
+        if not volts:
             for item in (self._adc_pos, self._adc_neg, self._adc_pos_txt, self._adc_neg_txt, *self._rticks):
                 self.itemconfigure(item, state="hidden")
             return
 
-        k = 1000.0 * self.ADC4_VREF / self.ADC4_CODES
-        max_dev = max(max(base - valid[0], valid[-1] - base) * k
-                      for _, _, _, _, base, valid in traces if base is not None)
-        half = self._scale_adc(max_dev)
-        if labels and half != self._rtick_key:
-            n = self.N_TICKS - 1
+        lo, hi = self._scale_adc(volts)
+        step = (hi - lo) / (self.N_TICKS - 1)
+        if labels and (lo, hi) != self._rtick_key:
             for i, item in enumerate(self._rticks):
-                self.itemconfigure(item, text=self._format_mv(half - 2 * half * i / n))
-            self._rtick_key = half
+                self.itemconfigure(item, text=self._format_volts(hi - step * i, step))
+            self._rtick_key = (lo, hi)
         for item in self._rticks:
             self.itemconfigure(item, state="normal" if labels else "hidden")
 
-        for line, txt, name, codes, base, _ in traces:
-            pts = self._adc_points(codes, base, half, left, top, pw, ph) if base is not None else []
+        for line, txt, name, codes, has_none, last in traces:
+            pts = self._adc_points(codes, lo, hi, left, top, pw, ph, has_none)
             if len(pts) >= 4:
                 self.coords(line, *pts)
                 self.itemconfigure(line, state="normal")
             else:
                 self.itemconfigure(line, state="hidden")
-            last = next((c for c in reversed(codes) if c is not None), None)
             if last is None:
                 self.itemconfigure(txt, state="hidden")
             else:
-                self.itemconfigure(txt, text=f"{name} {last * k / 1000:.3f}V", state="normal")
+                self.itemconfigure(txt, text=f"{name} {last * k:.3f}V", state="normal")
         self.tag_raise(self._line)
 
 
@@ -366,11 +432,11 @@ class GlobalGraph(TimeSeriesGraph):
 
     N_TICKS = 5
     GRID_X = 5
+    LINE_WIDTH = 2
 
     def __init__(self, master, max_points=300, **kwargs):
         kwargs.setdefault("font_size", 9)
         super().__init__(master, max_points=max_points, **kwargs)
-        self.itemconfigure(self._line, width=2)
 
     def _format_tick(self, val):
         return f"{int(round(val))}"
@@ -392,10 +458,9 @@ class GlobalGraph(TimeSeriesGraph):
 
     def _line_points(self, data, lo, hi, left, top, pw, ph):
         span = (hi - lo) or 1
-        xs = self._x_positions(len(data), left, pw)
         pts = []
         prev_y = None
-        for x, v in zip(xs, data):
+        for x, v in self._samples(data, left, pw):
             y = top + ph * (1.0 - (min(max(v, lo), hi) - lo) / span)
             if prev_y is not None and y != prev_y:
                 pts.extend((x, prev_y))   # gradino: prima in orizzontale, poi in verticale
@@ -405,11 +470,65 @@ class GlobalGraph(TimeSeriesGraph):
 
 
 # -------------------------------------------------------------------------
+#                       ZOOM NEL TEMPO (lenti + e -)
+# -------------------------------------------------------------------------
+
+def _lens_image(sign, color, size):
+    """Lente d'ingrandimento con '+' o '-' dentro. Disegnata a 4x e ridotta per avere bordi lisci;
+    l'immagine finale è 2x 'size', così CTkImage resta nitida anche con lo schermo al 150-200%."""
+    n = size * 2 * 4
+    img = Image.new("RGBA", (n, n), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    w = round(n * 0.09)                       # spessore del tratto
+    r = n * 0.29                              # raggio della lente
+    c = n * 0.42                              # centro della lente
+    d.ellipse((c - r, c - r, c + r, c + r), outline=color, width=w)
+    a = (r + w * 0.3) / math.sqrt(2)
+    d.line((c + a, c + a, n * 0.9, n * 0.9), fill=color, width=round(w * 1.5))  # manico
+    h = r * 0.5
+    d.line((c - h, c, c + h, c), fill=color, width=w)
+    if sign == "+":
+        d.line((c, c - h, c, c + h), fill=color, width=w)
+    return img.resize((size * 2, size * 2), Image.LANCZOS)
+
+
+class ZoomButtons(ctk.CTkFrame):
+    """Due lenti per lo zoom nel tempo di tutti i grafici di una tab: '+' accorcia la finestra
+    (zoom in), '-' la allunga (zoom out). command riceve -1 (zoom in) o +1 (zoom out)."""
+
+    ICON = 18
+
+    def __init__(self, master, command, **kwargs):
+        kwargs.setdefault("fg_color", "transparent")
+        super().__init__(master, **kwargs)
+        # Per ogni lente: (attiva, spenta al limite della finestra), nei colori di tema chiaro e scuro
+        self._icons = {sign: tuple(ctk.CTkImage(light_image=_lens_image(sign, light, self.ICON),
+                                                dark_image=_lens_image(sign, dark, self.ICON),
+                                                size=(self.ICON, self.ICON))
+                                   for light, dark in (theme.TEXT_MUTED, theme.TEXT_DIM))
+                       for sign in "+-"}
+        self._buttons = {}
+        for sign, step in (("+", -1), ("-", 1)):
+            btn = ctk.CTkButton(self, text="", image=self._icons[sign][0], width=28, height=28,
+                                fg_color="transparent", hover_color=theme.CARD_HOVER,
+                                command=lambda s=step: command(s))
+            btn.pack(side="left")
+            self._buttons[sign] = btn
+
+    def set_limits(self, can_zoom_in: bool, can_zoom_out: bool):
+        """Lente spenta quando la finestra è già al limite."""
+        for sign, enabled in (("+", can_zoom_in), ("-", can_zoom_out)):
+            self._buttons[sign].configure(image=self._icons[sign][0 if enabled else 1],
+                                          state="normal" if enabled else "disabled")
+
+
+# -------------------------------------------------------------------------
 #                            CHANNEL PREVIEW
 # -------------------------------------------------------------------------
 
 class ChannelPreview(ctk.CTkFrame):
-    def __init__(self, master, channel_id: int, *args, click_callback=None, **kwargs):
+    def __init__(self, master, channel_id: int, *args, click_callback=None, compact=False, capacity=None,
+                 **kwargs):
         kwargs.setdefault("fg_color", theme.CARD)
         kwargs.setdefault("corner_radius", 8)
         super().__init__(master, *args, **kwargs)
@@ -423,19 +542,22 @@ class ChannelPreview(ctk.CTkFrame):
         self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
+        # compact: anteprime più piccole (tab Global), font e margini ridotti perché "CH 32" e
+        # "Pt: 12" stiano ancora sulla stessa riga
+        title_size, count_size, header_pad = (11, 10, (6, 5)) if compact else (12, 11, (9, 8))
         header = ctk.CTkFrame(self, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew", padx=(9, 8), pady=(4, 0))
+        header.grid(row=0, column=0, sticky="ew", padx=header_pad, pady=(4, 0))
         header.grid_columnconfigure(0, weight=1)
 
-        self.ch_label = ctk.CTkLabel(header, text=f"CH {channel_id}", font=theme.font(12, "bold"),
+        self.ch_label = ctk.CTkLabel(header, text=f"CH {channel_id}", font=theme.font(title_size, "bold"),
                                      text_color=theme.TEXT, anchor="w", height=18)
         self.ch_label.grid(row=0, column=0, sticky="w")
 
-        self.particles_label = ctk.CTkLabel(header, text="Pt: 0", font=theme.font(11),
+        self.particles_label = ctk.CTkLabel(header, text="Pt: 0", font=theme.font(count_size),
                                             text_color=theme.TEXT_MUTED, anchor="e", height=18)
         self.particles_label.grid(row=0, column=1, sticky="e")
 
-        self.graph = TimeSeriesGraph(self, max_points=50, height=30, font_size=8)
+        self.graph = TimeSeriesGraph(self, max_points=50, height=30, font_size=8, capacity=capacity)
         self.graph.grid(row=1, column=0, sticky="nsew", padx=6, pady=(1, 6))
 
         if self._click_callback:
@@ -486,6 +608,9 @@ class ChannelPreview(ctk.CTkFrame):
     # --- stato ---
     def set_display_mode(self, mode: str):
         self.graph.set_display_mode(mode)
+
+    def set_window(self, points: int):
+        self.graph.set_window(points)
 
     def set_active_state(self, is_active: bool):
         self.is_active = is_active
